@@ -90,8 +90,14 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
             try self.writeIndent(depth);
             try self.writer.writeByte(']');
         },
-        .f64 => try std.fmt.formatFloatHexadecimal(val.f64, .{ .precision = self.options.float_precision }, self.writer),
-        .f32 => try std.fmt.formatFloatHexadecimal(val.f32, .{ .precision = self.options.float_precision }, self.writer),
+        .f64 => {
+            var buf: [128]u8 = undefined;
+            try self.writer.writeAll(try std.fmt.formatFloat(&buf, val.f64, .{ .precision = self.options.float_precision, .mode = .decimal }));
+        },
+        .f32 => {
+            var buf: [128]u8 = undefined;
+            try self.writer.writeAll(try std.fmt.formatFloat(&buf, val.f32, .{ .precision = self.options.float_precision, .mode = .decimal }));
+        },
         .i64 => try std.fmt.formatInt(val.i64, 10, .lower, .{}, self.writer),
         .i32 => try std.fmt.formatInt(val.i32, 10, .lower, .{}, self.writer),
         .i16 => try std.fmt.formatInt(val.i16, 10, .lower, .{}, self.writer),
@@ -116,7 +122,7 @@ pub fn inspect(self: *Inspect) !void {
 }
 
 test "inspector" {
-    const data = [_]u8{ 14, 0, 4, 0, 0, 0, 0, 0, 0, 0, 110, 97, 109, 101, 0, 5, 0, 0, 0, 0, 0, 0, 0, 115, 97, 121, 97, 110, 0, 8, 0, 0, 0, 0, 0, 0, 0, 108, 111, 99, 97, 116, 105, 111, 110, 14, 0, 4, 0, 0, 0, 0, 0, 0, 0, 99, 105, 116, 121, 0, 7, 0, 0, 0, 0, 0, 0, 0, 75, 111, 108, 107, 97, 116, 97, 15, 0, 4, 0, 0, 0, 0, 0, 0, 0, 116, 97, 103, 115, 13, 0, 4, 0, 0, 0, 0, 0, 0, 0, 98, 111, 122, 111, 11, 0, 15, 15 };
+    const data = [_]u8{ 14, 0, 4, 0, 0, 0, 0, 0, 0, 0, 110, 97, 109, 101, 0, 5, 0, 0, 0, 0, 0, 0, 0, 115, 97, 121, 97, 110, 0, 8, 0, 0, 0, 0, 0, 0, 0, 108, 111, 99, 97, 116, 105, 111, 110, 14, 0, 4, 0, 0, 0, 0, 0, 0, 0, 99, 105, 116, 121, 0, 7, 0, 0, 0, 0, 0, 0, 0, 75, 111, 108, 107, 97, 116, 97, 15, 0, 4, 0, 0, 0, 0, 0, 0, 0, 116, 97, 103, 115, 13, 0, 4, 0, 0, 0, 0, 0, 0, 0, 98, 111, 122, 111, 11, 0, 10, 197, 32, 128, 67, 15, 15 };
 
     var buf = std.ArrayList(u8).init(std.testing.allocator);
     defer buf.deinit();

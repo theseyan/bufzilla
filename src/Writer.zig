@@ -23,28 +23,27 @@ pub fn write(self: *Writer, data: common.Value) !void {
     const writer = self.raw.writer();
 
     // Write tag byte
-    try writer.writeByte(@intFromEnum(data));
+    try writer.writeInt(u8, @intFromEnum(data), .little);
 
     // Write value
     switch (data) {
-        .u64 => try writer.writeAll(std.mem.asBytes(&data.u64)),
-        .u32 => try writer.writeAll(std.mem.asBytes(&data.u32)),
-        .u16 => try writer.writeAll(std.mem.asBytes(&data.u16)),
-        .u8 => try writer.writeByte(data.u8),
-        .i64 => try writer.writeAll(std.mem.asBytes(&data.i64)),
-        .i32 => try writer.writeAll(std.mem.asBytes(&data.i32)),
-        .i16 => try writer.writeAll(std.mem.asBytes(&data.i16)),
-        .i8 => try writer.writeAll(std.mem.asBytes(&data.i8)),
-        .f64 => try writer.writeAll(std.mem.asBytes(&data.f64)),
-        .f32 => try writer.writeAll(std.mem.asBytes(&data.f32)),
-        .bool => try writer.writeByte(if (data.bool) 1 else 0),
+        .u64 => try writer.writeInt(u64, data.u64, .little),
+        .u32 => try writer.writeInt(u32, data.u32, .little),
+        .u16 => try writer.writeInt(u16, data.u16, .little),
+        .u8 => try writer.writeInt(u8, data.u8, .little),
+        .i64 => try writer.writeInt(i64, data.i64, .little),
+        .i32 => try writer.writeInt(i32, data.i32, .little),
+        .i16 => try writer.writeInt(i16, data.i16, .little),
+        .i8 => try writer.writeInt(i8, data.i8, .little),
+        .f64 => try writer.writeInt(u64, @bitCast(data.f64), .little),
+        .f32 => try writer.writeInt(u32, @bitCast(data.f32), .little),
+        .bool => try writer.writeInt(u8, if (data.bool) 1 else 0, .little),
         .string => {
             // Write string length
-            const len_bytes = std.mem.asBytes(&data.string.len);
-            try writer.writeAll(len_bytes);
+            try writer.writeInt(u64, data.string.len, .little);
 
             // Write string bytes
-            try writer.writeAll(data.string.ptr[0..data.string.len]);
+            try writer.writeAll(data.string);
         },
         .object, .array, .containerEnd, .null => {},
     }
@@ -71,10 +70,12 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             i32 => try self.write(common.Value{ .i32 = data }),
             i16 => try self.write(common.Value{ .i16 = data }),
             i8 => try self.write(common.Value{ .i8 = data }),
+            else => return error.UnsupportedType,
         },
         .Float => switch (T) {
             f64 => try self.write(common.Value{ .f64 = data }),
             f32 => try self.write(common.Value{ .f32 = data }),
+            else => return error.UnsupportedType,
         },
         .Optional => {
             if (data) |v| {
@@ -216,6 +217,7 @@ test "simple writes" {
     try writer.startArray();
     try writer.writeAny("bozo");
     try writer.writeAny(false);
+    try writer.writeAny(256.256);
     try writer.endContainer();
     try writer.endContainer();
 

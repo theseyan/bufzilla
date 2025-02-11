@@ -103,7 +103,7 @@ pub fn read(self: *Reader) !common.Value {
             return .{ .bool = (b != 0) };
         },
         .string => {
-            const len = try self.readBytes(usize);
+            const len = try self.readBytes(u64);
             if (self.pos + len > self.bytes.len) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
