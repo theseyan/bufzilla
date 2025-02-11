@@ -53,8 +53,8 @@ fn writeString(self: *Inspect, str: []const u8) !void {
 pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
     var count: usize = 0;
 
-    switch (val.type) {
-        .Object => {
+    switch (val) {
+        .object => {
             try self.writer.writeAll("{\n");
 
             while (try self.reader.iterateObject(val)) |kv| {
@@ -73,7 +73,7 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
             try self.writeIndent(depth);
             try self.writer.writeByte('}');
         },
-        .Array => {
+        .array => {
             try self.writer.writeAll("[\n");
 
             while (try self.reader.iterateArray(val)) |item| {
@@ -90,20 +90,20 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
             try self.writeIndent(depth);
             try self.writer.writeByte(']');
         },
-        .f64 => try std.fmt.formatFloatHexadecimal(val.value.f64, .{ .precision = self.options.float_precision }, self.writer),
-        .f32 => try std.fmt.formatFloatHexadecimal(val.value.f32, .{ .precision = self.options.float_precision }, self.writer),
-        .i64 => try std.fmt.formatInt(val.value.i64, 10, .lower, .{}, self.writer),
-        .i32 => try std.fmt.formatInt(val.value.i32, 10, .lower, .{}, self.writer),
-        .i16 => try std.fmt.formatInt(val.value.i16, 10, .lower, .{}, self.writer),
-        .i8 => try std.fmt.formatInt(val.value.i8, 10, .lower, .{}, self.writer),
-        .u64 => try std.fmt.formatInt(val.value.u64, 10, .lower, .{}, self.writer),
-        .u32 => try std.fmt.formatInt(val.value.u32, 10, .lower, .{}, self.writer),
-        .u16 => try std.fmt.formatInt(val.value.u16, 10, .lower, .{}, self.writer),
-        .u8 => try std.fmt.formatInt(val.value.u8, 10, .lower, .{}, self.writer),
-        .Bool => try self.writer.writeAll(if (val.value.bool) "true" else "false"),
-        .String => try self.writeString(val.value.string),
-        .Null => try self.writer.writeAll("null"),
-        .ContainerEnd => try self.writer.writeAll("END"),
+        .f64 => try std.fmt.formatFloatHexadecimal(val.f64, .{ .precision = self.options.float_precision }, self.writer),
+        .f32 => try std.fmt.formatFloatHexadecimal(val.f32, .{ .precision = self.options.float_precision }, self.writer),
+        .i64 => try std.fmt.formatInt(val.i64, 10, .lower, .{}, self.writer),
+        .i32 => try std.fmt.formatInt(val.i32, 10, .lower, .{}, self.writer),
+        .i16 => try std.fmt.formatInt(val.i16, 10, .lower, .{}, self.writer),
+        .i8 => try std.fmt.formatInt(val.i8, 10, .lower, .{}, self.writer),
+        .u64 => try std.fmt.formatInt(val.u64, 10, .lower, .{}, self.writer),
+        .u32 => try std.fmt.formatInt(val.u32, 10, .lower, .{}, self.writer),
+        .u16 => try std.fmt.formatInt(val.u16, 10, .lower, .{}, self.writer),
+        .u8 => try std.fmt.formatInt(val.u8, 10, .lower, .{}, self.writer),
+        .bool => try self.writer.writeAll(if (val.bool) "true" else "false"),
+        .string => try self.writeString(val.string),
+        .null => try self.writer.writeAll("null"),
+        .containerEnd => try self.writer.writeAll("END"),
     }
 }
 

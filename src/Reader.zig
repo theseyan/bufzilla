@@ -40,71 +40,75 @@ fn readBytes(self: *Reader, comptime T: type) !T {
 /// Reads a single data item from the underlying byte array and advances the position.
 pub fn read(self: *Reader) !common.Value {
     const type_byte = try self.readBytes(u8);
-    const val_type = try std.meta.intToEnum(common.ValueType, type_byte);
+    const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), type_byte);
 
     switch (val_type) {
-        .ContainerEnd => {
+        .containerEnd => {
             self.depth -= 1;
-            return .{ .type = .ContainerEnd, .value = .{ .depth = self.depth } };
+            return .{ .containerEnd = self.depth };
         },
-        .Object, .Array => {
+        .object => {
             self.depth += 1;
-            return .{ .type = val_type, .value = .{ .depth = self.depth } };
+            return .{ .object = self.depth };
+        },
+        .array => {
+            self.depth += 1;
+            return .{ .array = self.depth };
         },
         .f64 => {
             const f = try self.readBytes(f64);
-            return .{ .type = .f64, .value = .{ .f64 = f } };
+            return .{ .f64 = f };
         },
         .f32 => {
             const f = try self.readBytes(f32);
-            return .{ .type = .f32, .value = .{ .f32 = f } };
+            return .{ .f32 = f };
         },
         .i64 => {
             const i = try self.readBytes(i64);
-            return .{ .type = .i64, .value = .{ .i64 = i } };
+            return .{ .i64 = i };
         },
         .i32 => {
             const i = try self.readBytes(i32);
-            return .{ .type = .i32, .value = .{ .i32 = i } };
+            return .{ .i32 = i };
         },
         .i16 => {
             const i = try self.readBytes(i16);
-            return .{ .type = .i16, .value = .{ .i16 = i } };
+            return .{ .i16 = i };
         },
         .i8 => {
             const i = try self.readBytes(i8);
-            return .{ .type = .i8, .value = .{ .i8 = i } };
+            return .{ .i8 = i };
         },
         .u64 => {
             const u = try self.readBytes(u64);
-            return .{ .type = .u64, .value = .{ .u64 = u } };
+            return .{ .u64 = u };
         },
         .u32 => {
             const u = try self.readBytes(u32);
-            return .{ .type = .u32, .value = .{ .u32 = u } };
+            return .{ .u32 = u };
         },
         .u16 => {
             const u = try self.readBytes(u16);
-            return .{ .type = .u16, .value = .{ .u16 = u } };
+            return .{ .u16 = u };
         },
         .u8 => {
             const u = try self.readBytes(u8);
-            return .{ .type = .u8, .value = .{ .u8 = u } };
+            return .{ .u8 = u };
         },
-        .Null => {
-            return .{ .type = .Null, .value = undefined };
+        .null => {
+            return .{ .null = undefined };
         },
-        .Bool => {
+        .bool => {
             const b = try self.readBytes(u8);
-            return .{ .type = .Bool, .value = .{ .bool = (b != 0) } };
+            return .{ .bool = (b != 0) };
         },
-        .String => {
+        .string => {
             const len = try self.readBytes(usize);
             if (self.pos + len > self.bytes.len) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
             self.pos += len;
-            return .{ .type = .String, .value = .{ .string = self.bytes[str_ptr..(str_ptr + len)] } };
+            return .{ .string = self.bytes[str_ptr..(str_ptr + len)] };
         },
     }
 }
@@ -118,11 +122,11 @@ fn discardUntilDepth(self: *Reader, target_depth: u32) !void {
 
 /// Iterates over the key-value pairs of a given Value Object.
 pub fn iterateObject(self: *Reader, obj: common.Value) !?KeyValuePair {
-    std.debug.assert(obj.type == .Object);
-    try self.discardUntilDepth(obj.value.depth);
+    std.debug.assert(obj == .object);
+    try self.discardUntilDepth(obj.object);
 
     const key = try self.read();
-    if (key.type == .ContainerEnd) return null;
+    if (key == .containerEnd) return null;
 
     const value = try self.read();
     
@@ -134,11 +138,11 @@ pub fn iterateObject(self: *Reader, obj: common.Value) !?KeyValuePair {
 
 /// Iterates over the values of a given Value Array.
 pub fn iterateArray(self: *Reader, arr: common.Value) !?common.Value {
-    std.debug.assert(arr.type == .Array);
-    try self.discardUntilDepth(arr.value.depth);
+    std.debug.assert(arr == .array);
+    try self.discardUntilDepth(arr.array);
 
     const value = try self.read();
-    if (value.type == .ContainerEnd) return null;
+    if (value == .containerEnd) return null;
 
     return value;
 }
