@@ -152,8 +152,8 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             }
         },
         else => |info| {
-            // _ = info;
-            std.debug.print("zBuffers: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
+            _ = info;
+            // std.debug.print("zBuffers: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
             return error.UnsupportedType;
         }
     }

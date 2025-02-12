@@ -38,7 +38,7 @@ test "writer: primitive data types" {
 test "writer: zig data types" {
     var writer = Writer.init(std.testing.allocator);
     defer writer.deinit();
-    
+
     const DataType = struct {
         a: i64,
         b: struct {
@@ -107,4 +107,5 @@ test "inspect api" {
     ;
     
     try std.testing.expectEqualStrings(expected, buf.items);
+    std.debug.print("{s}", .{buf.items});
 }
