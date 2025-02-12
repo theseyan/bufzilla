@@ -152,8 +152,8 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             }
         },
         else => |info| {
-            _ = info;
-            // std.debug.print("zBuffers: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
+            // _ = info;
+            std.debug.print("zBuffers: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
             return error.UnsupportedType;
         }
     }
@@ -194,35 +194,4 @@ pub fn toOwnedSlice(self: *Writer) ![]u8 {
 /// Deinitializes the writer.
 pub fn deinit(self: *Writer) void {
     self.raw.deinit();
-}
-
-test "simple writes" {
-    // const allocator = std.testing.allocator;
-    var sfa = std.heap.stackFallback(1024, std.testing.allocator);
-    const allocator = sfa.get();
-
-    var timer = try std.time.Timer.start();
-    var writer = Writer.init(allocator);
-    defer writer.deinit();
-    
-    try writer.startObject();
-    try writer.writeAny("name");
-    try writer.writeAny("sayan");
-    try writer.writeAny("location");
-    try writer.startObject();
-    try writer.writeAny("city");
-    try writer.writeAny("Kolkata");
-    try writer.endContainer();
-    try writer.writeAny("tags");
-    try writer.startArray();
-    try writer.writeAny("bozo");
-    try writer.writeAny(false);
-    try writer.writeAny(256.256);
-    try writer.endContainer();
-    try writer.endContainer();
-
-    std.debug.print("Writer Elapsed: {d} ns\n", .{ timer.read() });
-
-    std.debug.print("{any}\n", .{writer.bytes()});
-    std.debug.print("Wrote {d} bytes\n", .{writer.len()});
 }

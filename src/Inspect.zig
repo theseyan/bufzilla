@@ -118,7 +118,6 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
 pub fn inspect(self: *Inspect) !void {
     const root_value = try self.reader.read();
     try self.printValue(root_value, 0);
-    try self.writer.writeByte('\n');
 }
 
 test "inspector" {

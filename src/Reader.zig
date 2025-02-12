@@ -146,24 +146,3 @@ pub fn iterateArray(self: *Reader, arr: common.Value) !?common.Value {
 
     return value;
 }
-
-test "reader" {
-    const data = [_]u8{ 14, 5, 123, 0, 0, 0, 0, 0, 0, 0, 11, 1, 0, 11, 0, 0, 0, 0, 0, 0, 0, 104, 97, 104, 97, 104, 97, 32, 98, 111, 121, 121, 15 };
-
-    var timer = try std.time.Timer.start();
-    var reader = Reader.init(&data);
-    
-    std.mem.doNotOptimizeAway(try reader.read());
-    std.mem.doNotOptimizeAway(try reader.read());
-    std.mem.doNotOptimizeAway(try reader.read());
-    std.mem.doNotOptimizeAway(try reader.read());
-    std.mem.doNotOptimizeAway(try reader.read());
-
-    std.debug.print("Reader Elapsed: {d} ns\n", .{ timer.read() });
-
-    // std.debug.print("{}\n", .{ try reader.read() });
-    // std.debug.print("{}\n", .{ try reader.read() });
-    // std.debug.print("{}\n", .{ try reader.read() });
-    // std.debug.print("{s}\n", .{ (try reader.read()).value.string });
-    // std.debug.print("{}\n", .{ try reader.read() });
-}
