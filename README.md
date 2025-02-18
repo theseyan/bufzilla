@@ -5,9 +5,10 @@ Based on rxi's article - ["A Simple Serialization System"](https://rxi.github.io
 
 zBuffers is ideal for serializing JSON-like objects and arrays, and has the following qualities:
 
-- **Independent** of byte order and architecture.
+- **Portable** across endianness and architectures.
 - **Schemaless**, fully self-describing format; no "pre-compilation" is necessary.
 - **Zero-copy** reads directly from the encoded bytes.
+- **Variable length integer encoding** for space efficiency.
 - Data can be read _linearly_ without any intermediate representation (eg. trees).
 - Printing encoded objects as JSON via `Inspect` API.
 - Serialize Zig structs and data types recursively.
@@ -96,6 +97,8 @@ which prints the following JSON:
 You can find more examples of usage in the [unit tests](https://github.com/theseyan/zbuffers/tree/main/test).
 
 ### Caveats
+
+NOTE: Post `v0.2.0` VLE has been implemented which alleviates most of these caveats.
 
 - zBuffers favors simplicity and performance over output size. Optional **variable length integer encoding** is a technique which can be added later, for a small performance penalty.
 - As a self-describing format, field names are present in the encoded result which affects the encoded size.

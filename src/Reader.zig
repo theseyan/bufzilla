@@ -34,13 +34,20 @@ fn readBytes(self: *Reader, comptime T: type) !T {
     const bytes = self.bytes[self.pos..(self.pos + @sizeOf(T))];
     self.pos += @sizeOf(T);
 
-    return std.mem.bytesAsValue(T, bytes[0..@sizeOf(T)]).*;
+    if (comptime @typeInfo(T) == .Int) {
+        return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little);
+    } else {
+        return std.mem.bytesAsValue(T, bytes[0..@sizeOf(T)]).*;
+    }
 }
 
 /// Reads a single data item from the underlying byte array and advances the position.
 pub fn read(self: *Reader) !common.Value {
-    const type_byte = try self.readBytes(u8);
-    const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), type_byte);
+    const tag_byte = try self.readBytes(u8);
+
+    // Decode the tag
+    const decoded_tag = common.decodeTag(tag_byte);
+    const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded_tag.tag);
 
     switch (val_type) {
         .containerEnd => {
@@ -54,6 +61,24 @@ pub fn read(self: *Reader) !common.Value {
         .array => {
             self.depth += 1;
             return .{ .array = self.depth };
+        },
+        .varIntUnsigned => {
+            const size = decoded_tag.data + 1;
+            if (self.pos + size > self.bytes.len) return error.UnexpectedEof;
+
+            const intBytes = self.bytes[self.pos..(self.pos + size)];
+            self.pos += size;
+
+            return .{ .u64 = common.decodeVarInt(intBytes) };
+        },
+        .varIntSigned => {
+            const size = decoded_tag.data + 1;
+            if (self.pos + size > self.bytes.len) return error.UnexpectedEof;
+
+            const intBytes = self.bytes[self.pos..(self.pos + size)];
+            self.pos += size;
+
+            return .{ .i64 = common.decodeZigZag(common.decodeVarInt(intBytes)) };
         },
         .f64 => {
             const f = try self.readBytes(f64);
@@ -99,16 +124,29 @@ pub fn read(self: *Reader) !common.Value {
             return .{ .null = undefined };
         },
         .bool => {
-            const b = try self.readBytes(u8);
-            return .{ .bool = (b != 0) };
+            return .{ .bool = (decoded_tag.data != 0) };
         },
-        .string => {
+        .varIntBytes => {
+            const size_len = decoded_tag.data + 1;
+            if (self.pos + size_len > self.bytes.len) return error.UnexpectedEof;
+
+            const intBytes = self.bytes[self.pos..(self.pos + size_len)];
+            self.pos += size_len;
+            const len = common.decodeVarInt(intBytes);
+            
+            if (self.pos + len > self.bytes.len) return error.UnexpectedEof;
+
+            const str_ptr = self.pos;
+            self.pos += len;
+            return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
+        },
+        .bytes => {
             const len = try self.readBytes(u64);
             if (self.pos + len > self.bytes.len) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
             self.pos += len;
-            return .{ .string = self.bytes[str_ptr..(str_ptr + len)] };
+            return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
         },
     }
 }
