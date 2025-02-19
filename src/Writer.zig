@@ -112,12 +112,12 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             i32 => try self.write(common.Value{ .i32 = data }, .i32),
             i16 => try self.write(common.Value{ .i16 = data }, .i16),
             i8 => try self.write(common.Value{ .i8 = data }, .i8),
-            else => return error.UnsupportedType,
+            else => @compileError("zbuffers: unsupported integer type: " ++ @typeName(T)),
         },
         .Float => switch (T) {
             f64 => try self.write(common.Value{ .f64 = data }, .f64),
             f32 => try self.write(common.Value{ .f32 = data }, .f32),
-            else => return error.UnsupportedType,
+            else => @compileError("zbuffers: unsupported float type: " ++ @typeName(T)),
         },
         .Optional => {
             if (data) |v| {
@@ -147,11 +147,11 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
                             try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
                         }
                     },
-                    else => return error.UnsupportedType,
+                    else => @compileError("zbuffers: unsupported pointer type: " ++ @typeName(T)),
                 }
             } else {
                 // std.debug.print("zBuffers: cannot serialize pointer type: {any} {s}\n", .{ptr_info.size, @typeName(ptr_info.child)});
-                return error.UnsupportedType;
+                @compileError("zbuffers: unsupported pointer type: " ++ @typeName(T));
             }
         },
         .Struct => |struct_info| {
@@ -190,13 +190,14 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
                     }
                 }
             } else {
-                @compileError("zBuffers: untagged unions are not supported");
+                @compileError("zbuffers: untagged unions are not supported");
             }
         },
+        .Void => {},
         else => |info| {
             _ = info;
             // std.debug.print("zBuffers: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
-            return error.UnsupportedType;
+            @compileError("zbuffers: unsupported data type: " ++ @typeName(T));
         }
     }
 }
