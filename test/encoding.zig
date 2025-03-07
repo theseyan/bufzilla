@@ -1,14 +1,14 @@
 const std = @import("std");
-const zbuffers = @import("zbuffers");
-pub const Common = zbuffers.Common;
+const bufzilla = @import("bufzilla");
+pub const Common = bufzilla.Common;
 
 test "varint encoding" {
     const varint = Common.encodeVarInt(512);
 
     const expected = &.{ 0, 2 };
-    try std.testing.expect(std.mem.eql(u8, expected, varint.bytes[0..varint.size + 1]));
+    try std.testing.expect(std.mem.eql(u8, expected, varint.bytes[0 .. varint.size + 1]));
 
-    const decoded = Common.decodeVarInt(varint.bytes[0..varint.size + 1]);
+    const decoded = Common.decodeVarInt(varint.bytes[0 .. varint.size + 1]);
     try std.testing.expectEqual(512, decoded);
 }
 

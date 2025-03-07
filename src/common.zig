@@ -2,13 +2,10 @@
 const std = @import("std");
 
 /// A serializeable tag. Must fit in 8 bits.
-pub const Tag = packed struct (u8) {
-    tag: u5,
-    data: u3
-};
+pub const Tag = packed struct(u8) { tag: u5, data: u3 };
 
 /// A value/type that can be serialized
-pub const Value = union (enum) {
+pub const Value = union(enum) {
     // Arbitrary byte arrays (strings, binary blobs, etc.)
     bytes: []const u8,
 
@@ -44,7 +41,7 @@ pub const Value = union (enum) {
     object: u32,
 
     // Container ending tag
-    containerEnd: u32
+    containerEnd: u32,
 };
 
 /// Encodes a 64-bit unsigned integer to a 8-byte buffer in variable length format.
@@ -53,10 +50,7 @@ pub fn encodeVarInt(val: u64) struct { bytes: [8]u8, size: u3 } {
     const little = std.mem.nativeToLittle(u64, val);
     const bytes: [8]u8 = @bitCast(little);
 
-    return .{
-        .bytes = bytes,
-        .size = if (val == 0) 0 else @truncate(((64 - @clz(little) + 7) / 8) - 1)
-    };
+    return .{ .bytes = bytes, .size = if (val == 0) 0 else @truncate(((64 - @clz(little) + 7) / 8) - 1) };
 }
 
 /// Decodes a variable length integer from a buffer.
@@ -77,10 +71,7 @@ pub inline fn decodeZigZag(x: u64) i64 {
 
 /// Encodes a tag and data into a byte.
 pub inline fn encodeTag(tag: u5, data: u3) u8 {
-    return @bitCast(Tag{
-        .tag = tag,
-        .data = data
-    });
+    return @bitCast(Tag{ .tag = tag, .data = data });
 }
 
 /// Decodes a tag and data from a byte.

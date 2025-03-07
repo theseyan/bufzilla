@@ -1,13 +1,12 @@
 /// Unit tests
-
 const std = @import("std");
-const zbuffers = @import("zbuffers");
+const bufzilla = @import("bufzilla");
 
-pub const Writer = zbuffers.Writer;
-pub const Reader = zbuffers.Reader;
-pub const Inspect = zbuffers.Inspect;
-pub const Value = zbuffers.Value;
-pub const Common = zbuffers.Common;
+pub const Writer = bufzilla.Writer;
+pub const Reader = bufzilla.Reader;
+pub const Inspect = bufzilla.Inspect;
+pub const Value = bufzilla.Value;
+pub const Common = bufzilla.Common;
 
 pub const encodingTests = @import("encoding.zig");
 
@@ -21,7 +20,7 @@ test {
 test "writer: primitive data types" {
     var writer = Writer.init(std.testing.allocator);
     defer writer.deinit();
-    
+
     try writer.startObject();
     try writer.writeAny("a");
     try writer.writeAny(123);
@@ -47,17 +46,13 @@ test "writer: zig data types" {
     var writer = Writer.init(sba.get());
     defer writer.deinit();
 
-    const DataType = struct {
-        a: i64,
-        b: struct {
-            c: bool,
-        },
-        d: []const union (enum) {
-            null: ?void,
-            f64: f64,
-            string: []const u8,
-        }
-    };
+    const DataType = struct { a: i64, b: struct {
+        c: bool,
+    }, d: []const union(enum) {
+        null: ?void,
+        f64: f64,
+        string: []const u8,
+    } };
 
     const data = DataType{
         .a = 123,
@@ -69,7 +64,7 @@ test "writer: zig data types" {
     try writer.writeAny(data);
     const elapsed = timer.read();
 
-    std.debug.print("size: {d} bytes\n{any}\nelapsed: {d} ns\n", .{writer.len(), writer.bytes(), elapsed});
+    std.debug.print("size: {d} bytes\n{any}\nelapsed: {d} ns\n", .{ writer.len(), writer.bytes(), elapsed });
 
     try std.testing.expect(std.mem.eql(u8, buf1[0..buf1_len], writer.bytes()));
 }
@@ -117,6 +112,6 @@ test "inspect api" {
         \\    ]
         \\}
     ;
-    
+
     try std.testing.expectEqualStrings(expected, buf.items);
 }

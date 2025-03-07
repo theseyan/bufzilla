@@ -1,5 +1,4 @@
 /// Writer API
-
 const std = @import("std");
 const common = @import("common.zig");
 
@@ -12,10 +11,7 @@ raw: std.ArrayList(u8),
 pub fn init(allocator: std.mem.Allocator) Writer {
     const arraylist = std.ArrayList(u8).init(allocator);
 
-    return Writer{
-        .allocator = allocator,
-        .raw = arraylist
-    };
+    return Writer{ .allocator = allocator, .raw = arraylist };
 }
 
 /// Writes a single data item to the underlying array list.
@@ -32,7 +28,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try writer.writeInt(u8, tag_byte, .little);
 
             // Write varint bytes
-            try self.raw.appendSlice(varint.bytes[0..varint.size + 1]);
+            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
         },
         .varIntSigned => {
             const varint = common.encodeVarInt(common.encodeZigZag(data.varIntSigned));
@@ -42,7 +38,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try writer.writeInt(u8, tag_byte, .little);
 
             // Write varint bytes
-            try self.raw.appendSlice(varint.bytes[0..varint.size + 1]);
+            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
         },
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
@@ -52,7 +48,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try writer.writeInt(u8, tag_byte, .little);
 
             // Write bytes length
-            try self.raw.appendSlice(varint.bytes[0..varint.size + 1]);
+            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
 
             // Write bytes
             try self.raw.appendSlice(data.varIntBytes);
@@ -64,7 +60,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
         else => {
             try writer.writeInt(u8, common.encodeTag(@intFromEnum(data), 0), .little);
 
-            switch(comptime tag) {
+            switch (comptime tag) {
                 .u64 => try writer.writeInt(u64, data.u64, .little),
                 .u32 => try writer.writeInt(u32, data.u32, .little),
                 .u16 => try writer.writeInt(u16, data.u16, .little),
@@ -83,9 +79,9 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
                     // Write bytes
                     try self.raw.appendSlice(data.bytes);
                 },
-                else => unreachable
+                else => unreachable,
             }
-        }
+        },
     }
 }
 
@@ -99,62 +95,62 @@ pub fn writeAny(self: *Writer, value: anytype) !void {
 /// Writes an item when type is known at comptime, but value may be runtime-known.
 pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
     switch (@typeInfo(T)) {
-        .ComptimeInt => try self.writeAnyExplicit(i64, @intCast(data)),
-        .ComptimeFloat => try self.writeAnyExplicit(f64, @floatCast(data)),
-        .Int => switch (T) {
-            u64 => try self.write(common.Value{ .u64 = data }, .u64),
-            // u64 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
+        .comptime_int => try self.writeAnyExplicit(i64, @intCast(data)),
+        .comptime_float => try self.writeAnyExplicit(f64, @floatCast(data)),
+        .int => switch (T) {
+            // u64 => try self.write(common.Value{ .u64 = data }, .u64),
+            u64 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u32 => try self.write(common.Value{ .u32 = data }, .u32),
             u16 => try self.write(common.Value{ .u16 = data }, .u16),
             u8 => try self.write(common.Value{ .u8 = data }, .u8),
-            i64 => try self.write(common.Value{ .i64 = data }, .i64),
-            // i64 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
+            // i64 => try self.write(common.Value{ .i64 = data }, .i64),
+            i64 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
             i32 => try self.write(common.Value{ .i32 = data }, .i32),
             i16 => try self.write(common.Value{ .i16 = data }, .i16),
             i8 => try self.write(common.Value{ .i8 = data }, .i8),
-            else => @compileError("zbuffers: unsupported integer type: " ++ @typeName(T)),
+            else => @compileError("bufzilla: unsupported integer type: " ++ @typeName(T)),
         },
-        .Float => switch (T) {
+        .float => switch (T) {
             f64 => try self.write(common.Value{ .f64 = data }, .f64),
             f32 => try self.write(common.Value{ .f32 = data }, .f32),
-            else => @compileError("zbuffers: unsupported float type: " ++ @typeName(T)),
+            else => @compileError("bufzilla: unsupported float type: " ++ @typeName(T)),
         },
-        .Optional => {
+        .optional => {
             if (data) |v| {
                 try self.writeAnyExplicit(@TypeOf(v), v);
             } else {
                 try self.writeAnyExplicit(@TypeOf(null), null);
             }
         },
-        .Bool => try self.write(common.Value{ .bool = data }, .bool),
-        .Null => try self.write(common.Value{ .null = undefined }, .null),
-        .Pointer => |ptr_info| {
-            if (ptr_info.size == .Slice and ptr_info.child == u8) {
+        .bool => try self.write(common.Value{ .bool = data }, .bool),
+        .null => try self.write(common.Value{ .null = undefined }, .null),
+        .pointer => |ptr_info| {
+            if (ptr_info.size == .slice and ptr_info.child == u8) {
                 // u8 slice (string)
                 try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
-            } else if (ptr_info.size == .Slice) {
+            } else if (ptr_info.size == .slice) {
                 // slice of any supported type
                 try self.startArray();
                 for (data) |item| {
                     try self.writeAnyExplicit(@TypeOf(item), item);
                 }
                 try self.endContainer();
-            } else if (ptr_info.size == .One) {
+            } else if (ptr_info.size == .one) {
                 // support null-terminated string pointers
                 switch (@typeInfo(ptr_info.child)) {
-                    .Array => |arr| {
-                        if (arr.child == u8 and arr.sentinel != null) {
+                    .array => |arr| {
+                        if (arr.child == u8 and arr.sentinel() != null) {
                             try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
                         }
                     },
-                    else => @compileError("zbuffers: unsupported pointer type: " ++ @typeName(T)),
+                    else => @compileError("bufzilla: unsupported pointer type: " ++ @typeName(T)),
                 }
             } else {
-                // std.debug.print("zBuffers: cannot serialize pointer type: {any} {s}\n", .{ptr_info.size, @typeName(ptr_info.child)});
-                @compileError("zbuffers: unsupported pointer type: " ++ @typeName(T));
+                // std.debug.print("bufzilla: cannot serialize pointer type: {any} {s}\n", .{ptr_info.size, @typeName(ptr_info.child)});
+                @compileError("bufzilla: unsupported pointer type: " ++ @typeName(T));
             }
         },
-        .Struct => |struct_info| {
+        .@"struct" => |struct_info| {
             try self.startObject();
             inline for (struct_info.fields) |field| {
                 try self.write(common.Value{ .varIntBytes = field.name }, .varIntBytes);
@@ -163,14 +159,14 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             }
             try self.endContainer();
         },
-        .Array => {
+        .array => {
             try self.startArray();
             inline for (data) |item| {
                 try self.writeAnyExplicit(@TypeOf(item), item);
             }
             try self.endContainer();
         },
-        .Vector => |vector_info| {
+        .vector => |vector_info| {
             try self.startArray();
             var i: usize = 0;
             inline while (i < vector_info.len) : (i += 1) {
@@ -178,7 +174,7 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             }
             try self.endContainer();
         },
-        .Union => |union_info| {
+        .@"union" => |union_info| {
             if (union_info.tag_type) |TT| {
                 const tag: TT = data;
                 inline for (union_info.fields) |field| {
@@ -190,15 +186,15 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
                     }
                 }
             } else {
-                @compileError("zbuffers: untagged unions are not supported");
+                @compileError("bufzilla: untagged unions are not supported");
             }
         },
-        .Void => {},
+        .void => {},
         else => |info| {
             _ = info;
-            // std.debug.print("zBuffers: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
-            @compileError("zbuffers: unsupported data type: " ++ @typeName(T));
-        }
+            // std.debug.print("bufzilla: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
+            @compileError("bufzilla: unsupported data type: " ++ @typeName(T));
+        },
     }
 }
 
@@ -208,7 +204,7 @@ pub inline fn startArray(self: *Writer) !void {
 }
 
 /// Writes an object tag.
-pub inline  fn startObject(self: *Writer) !void {
+pub inline fn startObject(self: *Writer) !void {
     try self.write(common.Value{ .object = undefined }, .object);
 }
 
