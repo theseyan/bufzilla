@@ -1,19 +1,23 @@
 # ⚡ bufzilla
 
-A simple and fast binary encoding format in pure Zig.
-Based on rxi's article - ["A Simple Serialization System"](https://rxi.github.io/a_simple_serialization_system.html).
+_buffer • zilla_
+
+A simple and fast **binary encoding format** in pure Zig.
+Originally based on rxi's article - ["A Simple Serialization System"](https://rxi.github.io/a_simple_serialization_system.html).
 
 bufzilla is ideal for serializing JSON-like objects and arrays, and has the following qualities:
 
 - **Portable** across endianness and architectures.
 - **Schemaless**, fully self-describing format; no "pre-compilation" is necessary.
 - **Zero-copy** reads directly from the encoded bytes.
-- **Variable length integer encoding** for space efficiency.
+- **Variable length integer encoding** enabled by default, no wasted bytes.
 - Data can be read _linearly_ without any intermediate representation (eg. trees).
 - Printing encoded objects as JSON via `Inspect` API.
 - Serialize Zig structs and data types recursively.
 
 ## Installation
+
+- Zig version: `0.14`
 
 ```sh
 zig fetch https://github.com/theseyan/bufzilla/archive/refs/tags/{VERSION}.tar.gz
@@ -98,10 +102,7 @@ You can find more examples of usage in the [unit tests](https://github.com/these
 
 ### Caveats
 
-NOTE: Post `v0.2.0` VLE has been implemented which alleviates most of these caveats.
-
-- bufzilla favors simplicity and performance over output size. Optional **variable length integer encoding** is a technique which can be added later, for a small performance penalty.
-- As a self-describing format, field names are present in the encoded result which affects the encoded size.
+- As a self-describing format, field names (keys) are present in the encoded result which can inflate the encoded size.
 
 ## Testing
 
