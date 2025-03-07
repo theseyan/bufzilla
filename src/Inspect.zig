@@ -107,9 +107,11 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
         .u16 => try std.fmt.formatInt(val.u16, 10, .lower, .{}, self.writer),
         .u8 => try std.fmt.formatInt(val.u8, 10, .lower, .{}, self.writer),
         .bool => try self.writer.writeAll(if (val.bool) "true" else "false"),
-        .string => try self.writeString(val.string),
+        .bytes => try self.writeString(val.bytes),
+        .varIntBytes => try self.writeString(val.varIntBytes),
         .null => try self.writer.writeAll("null"),
         .containerEnd => try self.writer.writeAll("END"),
+        .varIntUnsigned, .varIntSigned => {},
     }
 }
 
@@ -118,25 +120,4 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
 pub fn inspect(self: *Inspect) !void {
     const root_value = try self.reader.read();
     try self.printValue(root_value, 0);
-}
-
-test "inspector" {
-    const data = [_]u8{ 14, 0, 4, 0, 0, 0, 0, 0, 0, 0, 110, 97, 109, 101, 0, 5, 0, 0, 0, 0, 0, 0, 0, 115, 97, 121, 97, 110, 0, 8, 0, 0, 0, 0, 0, 0, 0, 108, 111, 99, 97, 116, 105, 111, 110, 14, 0, 4, 0, 0, 0, 0, 0, 0, 0, 99, 105, 116, 121, 0, 7, 0, 0, 0, 0, 0, 0, 0, 75, 111, 108, 107, 97, 116, 97, 15, 0, 4, 0, 0, 0, 0, 0, 0, 0, 116, 97, 103, 115, 13, 0, 4, 0, 0, 0, 0, 0, 0, 0, 98, 111, 122, 111, 11, 0, 10, 197, 32, 128, 67, 15, 15 };
-
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    var writer = buf.writer();
-
-    var inspector = Inspect.init(&data, &writer, .{});
-    try inspector.inspect();
-
-    std.debug.print("{s}", .{buf.items});
-
-    // const expected =
-    //     \\{
-    //     \\    "hello": 42
-    //     \\}
-    //     \\
-    // ;
-    // try std.testing.expectEqualStrings(expected, buf.items);
 }

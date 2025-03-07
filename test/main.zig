@@ -1,20 +1,26 @@
 /// Unit tests
-
 const std = @import("std");
-const zbuffers = @import("zbuffers");
+const bufzilla = @import("bufzilla");
 
-const Writer = zbuffers.Writer;
-const Reader = zbuffers.Reader;
-const Inspect = zbuffers.Inspect;
-const Value = zbuffers.Value;
+pub const Writer = bufzilla.Writer;
+pub const Reader = bufzilla.Reader;
+pub const Inspect = bufzilla.Inspect;
+pub const Value = bufzilla.Value;
+pub const Common = bufzilla.Common;
+
+pub const encodingTests = @import("encoding.zig");
 
 var buf1: [1024]u8 = undefined;
 var buf1_len: usize = undefined;
 
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 test "writer: primitive data types" {
     var writer = Writer.init(std.testing.allocator);
     defer writer.deinit();
-    
+
     try writer.startObject();
     try writer.writeAny("a");
     try writer.writeAny(123);
@@ -36,20 +42,17 @@ test "writer: primitive data types" {
 }
 
 test "writer: zig data types" {
-    var writer = Writer.init(std.testing.allocator);
+    var sba = std.heap.stackFallback(1024, std.testing.allocator);
+    var writer = Writer.init(sba.get());
     defer writer.deinit();
 
-    const DataType = struct {
-        a: i64,
-        b: struct {
-            c: bool,
-        },
-        d: []const union (enum) {
-            null: ?void,
-            f64: f64,
-            string: []const u8,
-        }
-    };
+    const DataType = struct { a: i64, b: struct {
+        c: bool,
+    }, d: []const union(enum) {
+        null: ?void,
+        f64: f64,
+        string: []const u8,
+    } };
 
     const data = DataType{
         .a = 123,
@@ -57,7 +60,11 @@ test "writer: zig data types" {
         .d = &.{ .{ .f64 = 123.123 }, .{ .null = null }, .{ .string = "value" } },
     };
 
+    var timer = try std.time.Timer.start();
     try writer.writeAny(data);
+    const elapsed = timer.read();
+
+    std.debug.print("size: {d} bytes\n{any}\nelapsed: {d} ns\n", .{ writer.len(), writer.bytes(), elapsed });
 
     try std.testing.expect(std.mem.eql(u8, buf1[0..buf1_len], writer.bytes()));
 }
@@ -66,18 +73,18 @@ test "reader: simple" {
     var reader = Reader.init(buf1[0..buf1_len]);
 
     try std.testing.expect(try reader.read() == Value.object);
-    try std.testing.expectEqualStrings((try reader.read()).string, "a");
-    try std.testing.expectEqual((try reader.read()).i64, 123);
-    try std.testing.expectEqualStrings((try reader.read()).string, "b");
+    try std.testing.expectEqualStrings("a", (try reader.read()).bytes);
+    try std.testing.expectEqual(123, (try reader.read()).i64);
+    try std.testing.expectEqualStrings("b", (try reader.read()).bytes);
     try std.testing.expect(try reader.read() == Value.object);
-    try std.testing.expectEqualStrings((try reader.read()).string, "c");
-    try std.testing.expectEqual((try reader.read()).bool, true);
+    try std.testing.expectEqualStrings("c", (try reader.read()).bytes);
+    try std.testing.expectEqual(true, (try reader.read()).bool);
     try std.testing.expect(try reader.read() == Value.containerEnd);
-    try std.testing.expectEqualStrings((try reader.read()).string, "d");
+    try std.testing.expectEqualStrings("d", (try reader.read()).bytes);
     try std.testing.expect(try reader.read() == Value.array);
-    try std.testing.expectEqual((try reader.read()).f64, 123.123);
+    try std.testing.expectEqual(123.123, (try reader.read()).f64);
     try std.testing.expect(try reader.read() == Value.null);
-    try std.testing.expectEqualStrings((try reader.read()).string, "value");
+    try std.testing.expectEqualStrings("value", (try reader.read()).bytes);
     try std.testing.expect(try reader.read() == Value.containerEnd);
     try std.testing.expect(try reader.read() == Value.containerEnd);
 
@@ -105,7 +112,6 @@ test "inspect api" {
         \\    ]
         \\}
     ;
-    
+
     try std.testing.expectEqualStrings(expected, buf.items);
-    std.debug.print("{s}", .{buf.items});
 }
