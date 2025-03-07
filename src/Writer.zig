@@ -43,15 +43,18 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
 
+            // Grow arraylist in one step if needed
+            try self.raw.ensureUnusedCapacity(1 + (varint.size + 1) + data.varIntBytes.len);
+
             // Write tag byte
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try writer.writeInt(u8, tag_byte, .little);
 
             // Write bytes length
-            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
+            self.raw.appendSliceAssumeCapacity(varint.bytes[0 .. varint.size + 1]);
 
             // Write bytes
-            try self.raw.appendSlice(data.varIntBytes);
+            self.raw.appendSliceAssumeCapacity(data.varIntBytes);
         },
         .bool => {
             const val = @intFromBool(data.bool);

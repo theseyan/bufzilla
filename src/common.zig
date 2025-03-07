@@ -9,7 +9,7 @@ pub const Value = union(enum) {
     // Arbitrary byte arrays (strings, binary blobs, etc.)
     bytes: []const u8,
 
-    // Byte arrays backed by variable length integer to represent it's size
+    // Byte arrays backed by a variable length integer to represent it's size
     varIntBytes: []const u8,
 
     // Integer types
