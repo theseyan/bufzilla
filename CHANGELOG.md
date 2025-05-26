@@ -1,3 +1,7 @@
+# v0.2.1
+- Compatible with Zig 0.14.1
+- Fix an issue in `build.zig` preventing compilation in macOS hosts.
+
 # v0.2.0
 
 - Upgrade to Zig 0.14

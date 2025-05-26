@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("test/main.zig"),
         .target = target,
         .optimize = optimize,
-        .use_lld = !no_llvm,
+        .use_lld = !no_llvm and target.result.os.tag != .macos,
         .use_llvm = !no_llvm,
     });
     exe_unit_tests.root_module.addImport("bufzilla", bufzilla);
