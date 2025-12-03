@@ -11,7 +11,7 @@ pub const KeyValuePair = struct {
 const Reader = @This();
 
 /// Error type for read operations.
-pub const Error = error{ UnexpectedEof, InvalidEnumTag };
+pub const Error = error{ UnexpectedEof, InvalidEnumTag, UnexpectedContainerEnd };
 
 // The underlying byte array.
 bytes: []const u8,
@@ -34,10 +34,13 @@ fn readBytes(self: *Reader, comptime T: type) !T {
     const bytes = self.bytes[self.pos..(self.pos + @sizeOf(T))];
     self.pos += @sizeOf(T);
 
-    if (comptime @typeInfo(T) == .int) {
-        return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little);
-    } else {
-        return std.mem.bytesAsValue(T, bytes[0..@sizeOf(T)]).*;
+    switch (@typeInfo(T)) {
+        .int => return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little),
+        .float => {
+            const IntType = std.meta.Int(.unsigned, @bitSizeOf(T));
+            return @bitCast(std.mem.readInt(IntType, bytes[0..@sizeOf(T)], .little));
+        },
+        else => @compileError("readBytes: unsupported type"),
     }
 }
 
@@ -51,6 +54,7 @@ pub fn read(self: *Reader) !common.Value {
 
     switch (val_type) {
         .containerEnd => {
+            if (self.depth == 0) return error.UnexpectedContainerEnd;
             self.depth -= 1;
             return .{ .containerEnd = self.depth };
         },
@@ -134,7 +138,7 @@ pub fn read(self: *Reader) !common.Value {
             self.pos += size_len;
             const len = common.decodeVarInt(intBytes);
 
-            if (self.pos + len > self.bytes.len) return error.UnexpectedEof;
+            if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
             self.pos += len;
@@ -142,7 +146,7 @@ pub fn read(self: *Reader) !common.Value {
         },
         .bytes => {
             const len = try self.readBytes(u64);
-            if (self.pos + len > self.bytes.len) return error.UnexpectedEof;
+            if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
             self.pos += len;

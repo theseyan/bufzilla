@@ -333,3 +333,68 @@ test "consistency: allocating and fixed produce identical output" {
     // Must be identical
     try std.testing.expectEqualSlices(u8, aw.written(), fixed.buffered());
 }
+
+// =============================================================================
+// Robustness Tests
+// =============================================================================
+
+test "reader: containerEnd at depth 0" {
+    // malformed: a containerEnd tag without any preceding container
+    const containerEndTag = Common.encodeTag(@intFromEnum(Value.containerEnd), 0);
+    const malformed = &[_]u8{containerEndTag};
+
+    var reader = Reader.init(malformed);
+    try std.testing.expectError(error.UnexpectedContainerEnd, reader.read());
+}
+
+test "reader: nested containerEnd underflow" {
+    // Create valid object and add extra containerEnd
+    var buffer: [32]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    try writer.startObject();
+    try writer.endContainer();
+
+    // append an extra containerEnd tag to get malformed data
+    const written = fixed.buffered();
+    var malformed: [33]u8 = undefined;
+    @memcpy(malformed[0..written.len], written);
+    malformed[written.len] = Common.encodeTag(@intFromEnum(Value.containerEnd), 0);
+
+    var reader = Reader.init(malformed[0 .. written.len + 1]);
+
+    try std.testing.expect((try reader.read()) == .object);
+    try std.testing.expect((try reader.read()) == .containerEnd);
+    // extra containerEnd should error, not underflow
+    try std.testing.expectError(error.UnexpectedContainerEnd, reader.read());
+}
+
+test "reader: malformed varIntBytes length" {
+    // malformed input with varIntBytes tag and a huge length that would overflow if added to pos.
+    const varIntBytesTag = Common.encodeTag(@intFromEnum(Value.varIntBytes), 3);
+
+    // large length (0xFFFFFFFF = ~4GB) that can cause overflow
+    var malformed: [5]u8 = undefined;
+    malformed[0] = varIntBytesTag;
+    malformed[1] = 0xFF;
+    malformed[2] = 0xFF;
+    malformed[3] = 0xFF;
+    malformed[4] = 0xFF;
+
+    var reader = Reader.init(&malformed);
+    try std.testing.expectError(error.UnexpectedEof, reader.read());
+}
+
+test "reader: malicious bytes length causes UnexpectedEof" {
+    // malformed input: bytes tag and a huge 8-byte length
+    const bytesTag = Common.encodeTag(@intFromEnum(Value.bytes), 0);
+
+    // 1 byte tag + 8 bytes for u64 length
+    var malformed: [9]u8 = undefined;
+    malformed[0] = bytesTag;
+    std.mem.writeInt(u64, malformed[1..9], std.math.maxInt(u64), .little);
+
+    var reader = Reader.init(&malformed);
+    try std.testing.expectError(error.UnexpectedEof, reader.read());
+}
