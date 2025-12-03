@@ -8,7 +8,7 @@ Originally based on rxi's article - ["A Simple Serialization System"](https://rx
 bufzilla is ideal for serializing JSON-like objects and arrays, and has the following qualities:
 
 - **Portable** across endianness and architectures.
-- **Schemaless**, fully self-describing format; no "pre-compilation" is necessary.
+- **Schemaless**, fully self-describing format; no "pre-compilation" step is necessary.
 - **Zero-copy** reads directly from the encoded bytes.
 - **Variable length integer encoding** enabled by default, no wasted bytes.
 - Data can be read _linearly_ without any intermediate representation (eg. trees).
@@ -38,23 +38,34 @@ Copy the hash generated and add `bufzilla` to your `build.zig.zon`:
 
 ## Usage
 
-The `Writer.writeAny` function can serialize primitive data types as well as Zig structs and tuples. Coupled with the `Writer.startObject`, `Writer.startArray` and `Writer.endContainer` functions, it can be used to incrementally build a message as well.
+bufzilla simply takes a `std.Io.Writer` interface, and writes encoded data to it. Such a writer can be backed by a growing buffer, a fixed array, a file, or a network socket, etc.
+
+### Writing to a dynamic buffer
+
+Use `std.Io.Writer.Allocating` when you need a dynamically growing buffer:
+
 ```zig
+const std = @import("std");
+const Io = std.Io;
 const Writer = @import("bufzilla").Writer;
 
-var writer = Writer.init(std.heap.c_allocator);
-defer writer.deinit();
+// Create an allocating writer
+var aw = Io.Writer.Allocating.init(allocator);
+defer aw.deinit();
+
+// Initialize bufzilla writer
+var writer = Writer.init(&aw.writer);
 
 const DataType = struct {
     a: i64,
     b: struct {
         c: bool,
     },
-    d: []const union (enum) {
+    d: []const union(enum) {
         null: ?void,
         f64: f64,
         string: []const u8,
-    }
+    },
 };
 
 const data = DataType{
@@ -64,25 +75,75 @@ const data = DataType{
 };
 
 try writer.writeAny(data);
-try std.debug.print("{}", .{ writer.bytes() });
+
+// Get the encoded bytes
+const encoded = aw.written();
+std.debug.print("Encoded {d} bytes\n", .{encoded.len});
 ```
 
-Let's print out the object as a JSON string via `Inspect` API.
+### Writing to a fixed buffer
+
+Use `std.Io.Writer.fixed` to prevent dynamic allocations when you know the maximum size upfront:
+
+```zig
+var buffer: [1024]u8 = undefined;
+var fixed = Io.Writer.fixed(&buffer);
+
+var writer = Writer.init(&fixed);
+try writer.writeAny("hello");
+try writer.writeAny(@as(i64, 42));
+
+const encoded = fixed.buffered();
+```
+
+### Incremental writing
+
+You can also build messages incrementally:
+
+```zig
+var writer = Writer.init(&aw.writer);
+
+try writer.startObject();
+try writer.writeAny("name");
+try writer.writeAny("Alice");
+try writer.writeAny("scores");
+try writer.startArray();
+try writer.writeAny(@as(i64, 100));
+try writer.writeAny(@as(i64, 95));
+try writer.endContainer(); // end array
+try writer.endContainer(); // end object
+```
+
+### Inspecting encoded data as JSON
+
+The `Inspect` API renders encoded bufzilla data as pretty-printed JSON:
 
 ```zig
 const Inspect = @import("bufzilla").Inspect;
 
-var buf = std.ArrayList(u8).init(std.testing.allocator);
-defer buf.deinit();
-var writer = buf.writer();
+// Output to an allocating writer
+var aw = Io.Writer.Allocating.init(allocator);
+defer aw.deinit();
 
-var inspector = Inspect.init(&encoded_bytes, &writer, .{});
-try inspector.inspect(); // Writes the JSON string to `buf`
+var inspector = Inspect.init(encoded_bytes, &aw.writer, .{});
+try inspector.inspect();
 
-std.debug.print("{s}", .{ buf.items });
+std.debug.print("{s}\n", .{aw.written()});
 ```
 
-which prints the following JSON:
+Or output directly to a fixed buffer:
+
+```zig
+var buffer: [4096]u8 = undefined;
+var fixed = Io.Writer.fixed(&buffer);
+
+var inspector = Inspect.init(encoded_bytes, &fixed, .{});
+try inspector.inspect();
+
+std.debug.print("{s}\n", .{fixed.buffered()});
+```
+
+Output:
 
 ```json
 {
@@ -98,7 +159,32 @@ which prints the following JSON:
 }
 ```
 
-You can find more examples of usage in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
+### Reading encoded data
+
+The `Reader` provides zero-copy access to encoded data:
+
+```zig
+const Reader = @import("bufzilla").Reader;
+
+var reader = Reader.init(encoded_bytes);
+
+// Read values sequentially
+const val = try reader.read();
+switch (val) {
+    .object => { /* iterate object */ },
+    .array => { /* iterate array */ },
+    .i64 => |n| std.debug.print("int: {d}\n", .{n}),
+    .bytes => |s| std.debug.print("string: {s}\n", .{s}),
+    // ... other types
+}
+
+// Or iterate containers
+while (try reader.iterateObject(obj)) |kv| {
+    // kv.key and kv.value
+}
+```
+
+You can find more examples in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
 
 ### Caveats
 

@@ -10,6 +10,9 @@ pub const KeyValuePair = struct {
 
 const Reader = @This();
 
+/// Error type for read operations.
+pub const Error = error{ UnexpectedEof, InvalidEnumTag };
+
 // The underlying byte array.
 bytes: []const u8,
 
