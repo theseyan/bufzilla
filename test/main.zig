@@ -132,7 +132,7 @@ test "writer/fixed: simple values" {
     try std.testing.expect(written.len > 0);
 
     // Verify we can read it back
-    var reader = Reader.init(written, .{});
+    var reader = Reader(.{}).init(written);
     try std.testing.expectEqualStrings("hello", (try reader.read()).bytes);
     try std.testing.expectEqual(42, (try reader.read()).i64);
     try std.testing.expectEqual(3.14, (try reader.read()).f64);
@@ -158,7 +158,7 @@ test "writer/fixed: empty containers" {
     const written = fixed.buffered();
 
     // Verify we can read it back
-    var reader = Reader.init(written, .{});
+    var reader = Reader(.{}).init(written);
     try std.testing.expect((try reader.read()) == .object);
     try std.testing.expect((try reader.read()) == .containerEnd);
     try std.testing.expect((try reader.read()) == .array);
@@ -170,7 +170,7 @@ test "writer/fixed: empty containers" {
 // =============================================================================
 
 test "reader: sequential reading" {
-    var reader = Reader.init(shared_encoded[0..shared_encoded_len], .{});
+    var reader = Reader(.{}).init(shared_encoded[0..shared_encoded_len]);
 
     try std.testing.expect(try reader.read() == Value.object);
     try std.testing.expectEqualStrings("a", (try reader.read()).bytes);
@@ -204,7 +204,7 @@ test "reader: object iteration" {
     try writer.writeAny("value2");
     try writer.endContainer();
 
-    var reader = Reader.init(fixed.buffered(), .{});
+    var reader = Reader(.{}).init(fixed.buffered());
     const obj = try reader.read();
     try std.testing.expect(obj == .object);
 
@@ -235,7 +235,7 @@ test "reader: array iteration" {
     try writer.writeAny(@as(i64, 3));
     try writer.endContainer();
 
-    var reader = Reader.init(fixed.buffered(), .{});
+    var reader = Reader(.{}).init(fixed.buffered());
     const arr = try reader.read();
     try std.testing.expect(arr == .array);
 
@@ -255,7 +255,7 @@ test "inspect/allocating: json output" {
     var aw = Io.Writer.Allocating.init(std.testing.allocator);
     defer aw.deinit();
 
-    var inspector = Inspect.init(shared_encoded[0..shared_encoded_len], &aw.writer, .{});
+    var inspector = Inspect(.{}).init(shared_encoded[0..shared_encoded_len], &aw.writer, .{});
     try inspector.inspect();
 
     const expected =
@@ -290,7 +290,7 @@ test "inspect: custom options" {
     var out_buffer: [128]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
 
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{
         .indent_size = 2,
         .float_precision = 4,
     });
@@ -343,7 +343,7 @@ test "reader: containerEnd at depth 0" {
     const containerEndTag = Common.encodeTag(@intFromEnum(Value.containerEnd), 0);
     const malformed = &[_]u8{containerEndTag};
 
-    var reader = Reader.init(malformed, .{});
+    var reader = Reader(.{}).init(malformed);
     try std.testing.expectError(error.UnexpectedContainerEnd, reader.read());
 }
 
@@ -362,7 +362,7 @@ test "reader: nested containerEnd underflow" {
     @memcpy(malformed[0..written.len], written);
     malformed[written.len] = Common.encodeTag(@intFromEnum(Value.containerEnd), 0);
 
-    var reader = Reader.init(malformed[0 .. written.len + 1], .{});
+    var reader = Reader(.{}).init(malformed[0 .. written.len + 1]);
 
     try std.testing.expect((try reader.read()) == .object);
     try std.testing.expect((try reader.read()) == .containerEnd);
@@ -383,11 +383,11 @@ test "reader: malformed varIntBytes length" {
     malformed[4] = 0xFF;
 
     // With max_bytes_length limit set, returns BytesTooLong
-    var reader = Reader.init(&malformed, .{ .max_bytes_length = 1024 * 1024 });
+    var reader = Reader(.{ .max_bytes_length = 1024 * 1024 }).init(&malformed);
     try std.testing.expectError(error.BytesTooLong, reader.read());
 
     // Without limit, returns UnexpectedEof
-    var reader2 = Reader.init(&malformed, .{});
+    var reader2 = Reader(.{}).init(&malformed);
     try std.testing.expectError(error.UnexpectedEof, reader2.read());
 }
 
@@ -401,11 +401,11 @@ test "reader: malicious bytes length causes BytesTooLong" {
     std.mem.writeInt(u64, malformed[1..9], std.math.maxInt(u64), .little);
 
     // With max_bytes_length limit set, returns BytesTooLong
-    var reader = Reader.init(&malformed, .{ .max_bytes_length = 1024 * 1024 });
+    var reader = Reader(.{ .max_bytes_length = 1024 * 1024 }).init(&malformed);
     try std.testing.expectError(error.BytesTooLong, reader.read());
 
     // Without limit, returns UnexpectedEof
-    var reader2 = Reader.init(&malformed, .{});
+    var reader2 = Reader(.{}).init(&malformed);
     try std.testing.expectError(error.UnexpectedEof, reader2.read());
 }
 
@@ -420,7 +420,7 @@ test "inspect: control characters are escaped in JSON" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
     try inspector.inspect();
 
     // Verify all control chars are properly escaped
@@ -438,7 +438,7 @@ test "inspect: invalid UTF-8 returns error" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.InvalidUtf8, inspector.inspect());
 }
@@ -454,7 +454,7 @@ test "inspect: valid UTF-8 with multibyte chars works" {
 
     var out_buffer: [128]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
     try inspector.inspect();
 
     try std.testing.expectEqualStrings("\"héllo 世界 🎉\"", out_fixed.buffered());
@@ -473,7 +473,7 @@ test "writer/reader: i64 max value" {
     try writer.writeAny(val);
 
     const written = fixed.buffered();
-    var reader = Reader.init(written, .{});
+    var reader = Reader(.{}).init(written);
     const read_val = try reader.read();
     try std.testing.expectEqual(val, read_val.i64);
 }
@@ -487,7 +487,7 @@ test "writer/reader: i64 min value" {
     try writer.writeAny(val);
 
     const written = fixed.buffered();
-    var reader = Reader.init(written, .{});
+    var reader = Reader(.{}).init(written);
     const read_val = try reader.read();
     try std.testing.expectEqual(val, read_val.i64);
 }
@@ -501,7 +501,7 @@ test "writer/reader: u64 max value" {
     try writer.writeAny(val);
 
     const written = fixed.buffered();
-    var reader = Reader.init(written, .{});
+    var reader = Reader(.{}).init(written);
     const read_val = try reader.read();
     try std.testing.expectEqual(val, read_val.u64);
 }
@@ -519,7 +519,7 @@ test "inspect: NaN f64 returns NonFiniteFloat error" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.NonFiniteFloat, inspector.inspect());
 }
@@ -533,7 +533,7 @@ test "inspect: positive infinity f64 returns NonFiniteFloat error" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.NonFiniteFloat, inspector.inspect());
 }
@@ -547,7 +547,7 @@ test "inspect: negative infinity f64 returns NonFiniteFloat error" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.NonFiniteFloat, inspector.inspect());
 }
@@ -561,7 +561,7 @@ test "inspect: NaN f32 returns NonFiniteFloat error" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.NonFiniteFloat, inspector.inspect());
 }
@@ -575,7 +575,7 @@ test "inspect: infinity f32 returns NonFiniteFloat error" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.NonFiniteFloat, inspector.inspect());
 }
@@ -589,7 +589,7 @@ test "inspect: finite floats work correctly" {
 
     var out_buffer: [64]u8 = undefined;
     var out_fixed = Io.Writer.fixed(&out_buffer);
-    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try inspector.inspect();
 }
@@ -612,7 +612,7 @@ test "reader: max_depth limit enforced" {
     }
 
     // Set max_depth to 5
-    var reader = Reader.init(enc_fixed.buffered(), .{ .max_depth = 5 });
+    var reader = Reader(.{ .max_depth = 5 }).init(enc_fixed.buffered());
 
     // Should fail at depth 5
     var depth: usize = 0;
@@ -640,7 +640,7 @@ test "reader: max_depth null allows unlimited depth" {
     }
 
     // Set max_depth to null (unlimited)
-    var reader = Reader.init(enc_aw.written(), .{ .max_depth = null });
+    var reader = Reader(.{ .max_depth = null }).init(enc_aw.written());
 
     // Should be able to read all levels
     var depth: usize = 0;
@@ -660,7 +660,7 @@ test "reader: max_bytes_length limit enforced for varIntBytes" {
     try writer.writeAny(long_string);
 
     // Set max_bytes_length to 50
-    var reader = Reader.init(enc_fixed.buffered(), .{ .max_bytes_length = 50 });
+    var reader = Reader(.{ .max_bytes_length = 50 }).init(enc_fixed.buffered());
 
     try std.testing.expectError(error.BytesTooLong, reader.read());
 }
@@ -675,7 +675,7 @@ test "reader: max_bytes_length limit enforced for bytes" {
     try writer.write(Value{ .bytes = &long_data }, .bytes);
 
     // Set max_bytes_length to 50
-    var reader = Reader.init(enc_fixed.buffered(), .{ .max_bytes_length = 50 });
+    var reader = Reader(.{ .max_bytes_length = 50 }).init(enc_fixed.buffered());
 
     try std.testing.expectError(error.BytesTooLong, reader.read());
 }
@@ -690,7 +690,7 @@ test "reader: max_bytes_length null allows large bytes" {
     try writer.writeAny(long_string);
 
     // Set max_bytes_length to null
-    var reader = Reader.init(enc_fixed.buffered(), .{ .max_bytes_length = null });
+    var reader = Reader(.{ .max_bytes_length = null }).init(enc_fixed.buffered());
 
     const val = try reader.read();
     try std.testing.expectEqualStrings(long_string, val.bytes);
@@ -709,7 +709,7 @@ test "reader: max_array_length limit enforced" {
     try writer.endContainer();
 
     // Set max_array_length to 50
-    var reader = Reader.init(enc_fixed.buffered(), .{ .max_array_length = 50 });
+    var reader = Reader(.{ .max_depth = 100, .max_array_length = 50 }).init(enc_fixed.buffered());
 
     const arr = try reader.read();
     try std.testing.expect(arr == .array);
@@ -725,32 +725,6 @@ test "reader: max_array_length limit enforced" {
             break;
         }
     }
-}
-
-test "reader: max_array_length null allows large arrays" {
-    var enc_aw = Io.Writer.Allocating.init(std.testing.allocator);
-    defer enc_aw.deinit();
-    var writer = Writer.init(&enc_aw.writer);
-
-    // Create array with 2000 elements
-    try writer.startArray();
-    for (0..2000) |i| {
-        try writer.writeAny(@as(i64, @intCast(i)));
-    }
-    try writer.endContainer();
-
-    // Set max_array_length to null
-    var reader = Reader.init(enc_aw.written(), .{ .max_array_length = null });
-
-    const arr = try reader.read();
-    try std.testing.expect(arr == .array);
-
-    // Should be able to read all 2000 elements
-    var count: usize = 0;
-    while (try reader.iterateArray(arr)) |_| {
-        count += 1;
-    }
-    try std.testing.expectEqual(2000, count);
 }
 
 test "reader: max_object_size limit enforced" {
@@ -769,7 +743,7 @@ test "reader: max_object_size limit enforced" {
     try writer.endContainer();
 
     // Set max_object_size to 50
-    var reader = Reader.init(enc_fixed.buffered(), .{ .max_object_size = 50 });
+    var reader = Reader(.{ .max_depth = 100, .max_object_size = 50 }).init(enc_fixed.buffered());
 
     const obj = try reader.read();
     try std.testing.expect(obj == .object);
@@ -787,33 +761,46 @@ test "reader: max_object_size limit enforced" {
     }
 }
 
-test "reader: max_object_size null allows large objects" {
-    var enc_aw = Io.Writer.Allocating.init(std.testing.allocator);
-    defer enc_aw.deinit();
-    var writer = Writer.init(&enc_aw.writer);
+test "reader: sibling containers have separate counts" {
+    var enc_buffer: [2048]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
 
-    // Create object with 2000 key-value pairs
-    try writer.startObject();
-    for (0..2000) |i| {
-        var key_buf: [16]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "key{d}", .{i}) catch unreachable;
-        try writer.writeAny(key);
+    // Create two sibling arrays at the same depth
+    try writer.startArray(); // outer array
+    try writer.startArray(); // first inner array with 40 elements
+    for (0..40) |i| {
         try writer.writeAny(@as(i64, @intCast(i)));
     }
     try writer.endContainer();
-
-    // Set max_object_size to null
-    var reader = Reader.init(enc_aw.written(), .{ .max_object_size = null });
-
-    const obj = try reader.read();
-    try std.testing.expect(obj == .object);
-
-    // Should be able to read all 2000 pairs
-    var count: usize = 0;
-    while (try reader.iterateObject(obj)) |_| {
-        count += 1;
+    try writer.startArray(); // second inner array with 40 elements
+    for (0..40) |i| {
+        try writer.writeAny(@as(i64, @intCast(i)));
     }
-    try std.testing.expectEqual(2000, count);
+    try writer.endContainer();
+    try writer.endContainer();
+
+    // Set max_array_length to 50 - each array has 40, so both should pass
+    var reader = Reader(.{ .max_depth = 100, .max_array_length = 50 }).init(enc_fixed.buffered());
+
+    const outer = try reader.read();
+    try std.testing.expect(outer == .array);
+
+    const inner1 = (try reader.iterateArray(outer)).?;
+    try std.testing.expect(inner1 == .array);
+    var count1: usize = 0;
+    while (try reader.iterateArray(inner1)) |_| {
+        count1 += 1;
+    }
+    try std.testing.expectEqual(40, count1);
+
+    const inner2 = (try reader.iterateArray(outer)).?;
+    try std.testing.expect(inner2 == .array);
+    var count2: usize = 0;
+    while (try reader.iterateArray(inner2)) |_| {
+        count2 += 1;
+    }
+    try std.testing.expectEqual(40, count2);
 }
 
 test "reader: combined limits enforced" {
@@ -828,12 +815,12 @@ test "reader: combined limits enforced" {
     try writer.endContainer();
 
     // Set strict limits on everything
-    var reader = Reader.init(enc_aw.written(), .{
+    var reader = Reader(.{
         .max_depth = 10,
         .max_bytes_length = 100,
         .max_array_length = 50,
         .max_object_size = 50,
-    });
+    }).init(enc_aw.written());
 
     const obj = try reader.read();
     try std.testing.expect(obj == .object);

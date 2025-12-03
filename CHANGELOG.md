@@ -8,6 +8,15 @@
 - `Inspect` now accepts a `*std.Io.Writer` instead of the deprecated `std.io.AnyWriter`.
 - Removed `Writer.deinit()`, `Writer.bytes()`, `Writer.len()`, `Writer.toOwnedSlice()` — buffer management is now the caller's responsibility.
 
+### Safety
+- Added configurable `ReadLimits` with the following options:
+  - `max_depth`: maximum nesting depth for containers
+  - `max_bytes_length`: maximum string/binary blob size
+  - `max_array_length`: maximum array element count
+  - `max_object_size`: maximum object key-value pair count
+- New errors: `MaxDepthExceeded`, `BytesTooLong`, `ArrayTooLarge`, `ObjectTooLarge`.
+- `Inspect.printValue` now returns `NonFiniteFloat` error for NaN and Infinity float values (invalid JSON).
+
 ### Benchmarks
 - A benchmark suite has been added (mostly ported from [zig-msgpack](https://github.com/zigcc/zig-msgpack)).
 
@@ -19,8 +28,6 @@
 - Fix `encodeVarInt` computing wrong size on big-endian machines.
 - `Inspect` now returns `error.InvalidUtf8` for non-UTF-8 byte sequences instead of producing invalid JSON.
 - Fix integer overflow in `Writer.write` when writing extremely large integers.
-- Added `max_depth` (default `512`) option to Inspect API to prevent malicious inputs from going into deep recursion/stack overflow.
-- Fix: `Inspect.printValue` now correctly throws a `NonFiniteFloat` error for NaN and Infinite float values.
 
 # v0.2.1
 - Compatible with Zig 0.14.1

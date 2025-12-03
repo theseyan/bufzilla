@@ -125,7 +125,7 @@ const Inspect = @import("bufzilla").Inspect;
 var aw = Io.Writer.Allocating.init(allocator);
 defer aw.deinit();
 
-var inspector = Inspect.init(encoded_bytes, &aw.writer, .{});
+var inspector = Inspect(.{}).init(encoded_bytes, &aw.writer, .{});
 try inspector.inspect();
 
 std.debug.print("{s}\n", .{aw.written()});
@@ -137,7 +137,7 @@ Or output directly to a fixed buffer:
 var buffer: [4096]u8 = undefined;
 var fixed = Io.Writer.fixed(&buffer);
 
-var inspector = Inspect.init(encoded_bytes, &fixed, .{});
+var inspector = Inspect(.{}).init(encoded_bytes, &fixed, .{});
 try inspector.inspect();
 
 std.debug.print("{s}\n", .{fixed.buffered()});
@@ -166,7 +166,7 @@ The `Reader` provides zero-copy access to encoded data:
 ```zig
 const Reader = @import("bufzilla").Reader;
 
-var reader = Reader.init(encoded_bytes);
+var reader = Reader(.{}).init(encoded_bytes);
 
 // Read values sequentially
 const val = try reader.read();
@@ -185,6 +185,45 @@ while (try reader.iterateObject(obj)) |kv| {
 ```
 
 You can find more examples in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
+
+### Safety & Security
+
+When reading untrusted data, bufzilla provides configurable limits at compile time to prevent infinite recursion/stack overflow errors.
+
+```zig
+const Reader = @import("bufzilla").Reader;
+
+// Default limits
+var reader = Reader(.{}).init(data);
+
+// Custom limits
+var reader = Reader(.{
+    .max_depth = 50,                    // Max nesting depth
+    .max_bytes_length = 1024 * 1024,    // Max string/binary blob size
+    .max_array_length = 10_000,         // Max array elements
+    .max_object_size = 10_000,          // Max object key-value pairs
+}).init(data);
+
+// Unlimited depth
+var reader = Reader(.{ .max_depth = null }).init(data);
+```
+
+| Limit | Default | Error |
+|-------|---------|-------|
+| `max_depth` | 2048 | `MaxDepthExceeded` |
+| `max_bytes_length` | unlimited | `BytesTooLong` |
+| `max_array_length` | unlimited | `ArrayTooLarge` |
+| `max_object_size` | unlimited | `ObjectTooLarge` |
+
+**Notes:**
+- `max_array_length` and `max_object_size` require `max_depth` to be set. Setting them with `max_depth = null` is a compile error.
+- Reader internally allocates a stack buffer of size `max_depth` for iteration counters when array/object limits are enabled. Keep `max_depth` reasonable (default 2048 uses ~16KB).
+
+The `Inspect` API also accepts limits as a parameter:
+
+```zig
+var inspector = Inspect(.{ .max_depth = 100 }).init(data, &writer, .{});
+```
 
 ### Caveats
 
