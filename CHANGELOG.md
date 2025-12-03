@@ -28,6 +28,7 @@
 - Fix `encodeVarInt` computing wrong size on big-endian machines.
 - `Inspect` now returns `error.InvalidUtf8` for non-UTF-8 byte sequences instead of producing invalid JSON.
 - Fix integer overflow in `Writer.write` when writing extremely large integers.
+- Fix `Writer.writeAny` silently dropping pointer-to-array values like `&[_]u8{1,2,3}` (data loss).
 
 # v0.2.1
 - Compatible with Zig 0.14.1

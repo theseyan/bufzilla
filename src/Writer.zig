@@ -119,14 +119,25 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
                 }
                 try self.endContainer();
             } else if (ptr_info.size == .one) {
-                // support null-terminated string pointers
+                // pointer to single item - dereference and encode
                 switch (@typeInfo(ptr_info.child)) {
                     .array => |arr| {
-                        if (arr.child == u8 and arr.sentinel() != null) {
+                        if (arr.child == u8) {
+                            // pointer to byte array - write as bytes
                             try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                        } else {
+                            // pointer to array of other types - write as array
+                            try self.startArray();
+                            for (data) |item| {
+                                try self.writeAnyExplicit(@TypeOf(item), item);
+                            }
+                            try self.endContainer();
                         }
                     },
-                    else => @compileError("bufzilla: unsupported pointer type: " ++ @typeName(T)),
+                    else => {
+                        // pointer to single value - dereference and write
+                        try self.writeAnyExplicit(ptr_info.child, data.*);
+                    },
                 }
             } else {
                 @compileError("bufzilla: unsupported pointer type: " ++ @typeName(T));

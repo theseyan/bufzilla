@@ -165,6 +165,47 @@ test "writer/fixed: empty containers" {
     try std.testing.expect((try reader.read()) == .containerEnd);
 }
 
+test "writer/fixed: pointer to array" {
+    var buffer: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+
+    var writer = Writer.init(&fixed);
+
+    // Pointer to byte array (should encode as bytes)
+    const byte_arr = [_]u8{ 1, 2, 3 };
+    try writer.writeAny(&byte_arr);
+
+    // Pointer to int array (should encode as array)
+    const int_arr = [_]i64{ 10, 20, 30 };
+    try writer.writeAny(&int_arr);
+
+    // Pointer to single value
+    const single: i64 = 42;
+    try writer.writeAny(&single);
+
+    const written = fixed.buffered();
+    try std.testing.expect(written.len > 0);
+
+    // Verify we can read it back
+    var reader = Reader(.{}).init(written);
+
+    // Byte array
+    const bytes = try reader.read();
+    try std.testing.expect(bytes == .bytes);
+    try std.testing.expectEqualSlices(u8, &byte_arr, bytes.bytes);
+
+    // Int array
+    const arr = try reader.read();
+    try std.testing.expect(arr == .array);
+    try std.testing.expectEqual(10, (try reader.read()).i64);
+    try std.testing.expectEqual(20, (try reader.read()).i64);
+    try std.testing.expectEqual(30, (try reader.read()).i64);
+    try std.testing.expect((try reader.read()) == .containerEnd);
+
+    // Single value
+    try std.testing.expectEqual(42, (try reader.read()).i64);
+}
+
 // =============================================================================
 // Reader Tests
 // =============================================================================

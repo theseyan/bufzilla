@@ -188,7 +188,7 @@ You can find more examples in the [unit tests](https://github.com/theseyan/bufzi
 
 ### Safety & Security
 
-When reading untrusted data, bufzilla provides configurable limits at compile time to prevent infinite recursion/stack overflow errors.
+When reading untrusted data, bufzilla provides configurable limits at compile time to prevent infinite recursion/stack overflow errors, with negligible performance loss.
 
 ```zig
 const Reader = @import("bufzilla").Reader;
