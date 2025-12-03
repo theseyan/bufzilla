@@ -19,6 +19,8 @@
 - Fix `encodeVarInt` computing wrong size on big-endian machines.
 - `Inspect` now returns `error.InvalidUtf8` for non-UTF-8 byte sequences instead of producing invalid JSON.
 - Fix integer overflow in `Writer.write` when writing extremely large integers.
+- Added `max_depth` (default `512`) option to Inspect API to prevent malicious inputs from going into deep recursion/stack overflow.
+- Fix: `Inspect.printValue` now correctly throws a `NonFiniteFloat` error for NaN and Infinite float values.
 
 # v0.2.1
 - Compatible with Zig 0.14.1

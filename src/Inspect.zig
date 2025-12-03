@@ -7,12 +7,14 @@ const Reader = @import("Reader.zig");
 pub const InspectOptions = struct {
     indent_size: usize = 4,
     float_precision: usize = 14,
+    /// Limits for the underlying Reader.
+    limits: Reader.ReadLimits = .{},
 };
 
 const Inspect = @This();
 
 /// Error type for inspect operations.
-pub const Error = Io.Writer.Error || Reader.Error || error{InvalidUtf8};
+pub const Error = Io.Writer.Error || Reader.Error || error{ InvalidUtf8, NonFiniteFloat };
 
 writer: *Io.Writer,
 reader: Reader,
@@ -23,7 +25,7 @@ options: InspectOptions,
 pub fn init(data: []const u8, writer: *Io.Writer, options: InspectOptions) Inspect {
     return .{
         .writer = writer,
-        .reader = Reader.init(data),
+        .reader = Reader.init(data, options.limits),
         .options = options,
     };
 }
@@ -100,8 +102,14 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) Error!void {
             try self.writeIndent(depth);
             try w.writeByte(']');
         },
-        .f64 => try w.printFloat(val.f64, .{ .precision = self.options.float_precision, .mode = .decimal }),
-        .f32 => try w.printFloat(val.f32, .{ .precision = self.options.float_precision, .mode = .decimal }),
+        .f64 => {
+            if (!std.math.isFinite(val.f64)) return error.NonFiniteFloat;
+            try w.printFloat(val.f64, .{ .precision = self.options.float_precision, .mode = .decimal });
+        },
+        .f32 => {
+            if (!std.math.isFinite(val.f32)) return error.NonFiniteFloat;
+            try w.printFloat(val.f32, .{ .precision = self.options.float_precision, .mode = .decimal });
+        },
         .i64 => try w.print("{d}", .{val.i64}),
         .i32 => try w.print("{d}", .{val.i32}),
         .i16 => try w.print("{d}", .{val.i16}),

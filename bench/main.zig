@@ -63,7 +63,7 @@ fn benchNullRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -91,7 +91,7 @@ fn benchBoolRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -119,7 +119,7 @@ fn benchSmallIntRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -148,7 +148,7 @@ fn benchLargeIntRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -176,7 +176,7 @@ fn benchFloatRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -208,7 +208,7 @@ fn benchShortStrRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -238,7 +238,7 @@ fn benchMediumStrRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -272,7 +272,7 @@ fn benchSmallBinRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -302,7 +302,7 @@ fn benchLargeBinRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     _ = try reader.read();
 }
 
@@ -342,7 +342,7 @@ fn benchSmallArrayRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     const array = try reader.read();
     while (try reader.iterateArray(array)) |_| {}
 }
@@ -379,7 +379,7 @@ fn benchMediumArrayRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     const array = try reader.read();
     while (try reader.iterateArray(array)) |_| {}
 }
@@ -426,7 +426,7 @@ fn benchSmallObjectRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     const obj = try reader.read();
     while (try reader.iterateObject(obj)) |_| {}
 }
@@ -469,7 +469,7 @@ fn benchMediumObjectRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     const obj = try reader.read();
     while (try reader.iterateObject(obj)) |_| {}
 }
@@ -542,7 +542,7 @@ fn benchNestedStructureRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     while (reader.pos < State.len) {
         _ = try reader.read();
     }
@@ -615,7 +615,7 @@ fn benchMixedTypesRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     while (reader.pos < State.len) {
         _ = try reader.read();
     }
@@ -680,7 +680,7 @@ fn benchStructRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     const obj = try reader.read();
     while (try reader.iterateObject(obj)) |_| {}
 }
@@ -738,7 +738,7 @@ fn benchComplexStructRead() !void {
         State.initialized = true;
     }
 
-    var reader = Reader.init(State.buffer[0..State.len]);
+    var reader = Reader.init(State.buffer[0..State.len], .{});
     while (reader.pos < State.len) {
         _ = try reader.read();
     }

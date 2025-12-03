@@ -8,10 +8,25 @@ pub const KeyValuePair = struct {
     value: common.Value,
 };
 
+/// Iteration limits to protect against malformed input.
+pub const ReadLimits = struct {
+    /// Maximum nesting depth. Set to null for unlimited.
+    max_depth: ?u32 = 2048,
+
+    /// Maximum byte array length for strings/binary blobs. Set to null for unlimited.
+    max_bytes_length: ?usize = null,
+
+    /// Maximum array element count. Set to null for unlimited.
+    max_array_length: ?usize = null,
+
+    /// Maximum object key-value pair count. Set to null for unlimited.
+    max_object_size: ?usize = null,
+};
+
 const Reader = @This();
 
 /// Error type for read operations.
-pub const Error = error{ UnexpectedEof, InvalidEnumTag, UnexpectedContainerEnd };
+pub const Error = error{ UnexpectedEof, InvalidEnumTag, UnexpectedContainerEnd, MaxDepthExceeded, BytesTooLong, ArrayTooLarge, ObjectTooLarge };
 
 // The underlying byte array.
 bytes: []const u8,
@@ -22,9 +37,16 @@ pos: usize = 0,
 // The current traversal depth.
 depth: u32 = 0,
 
+// Reader limits.
+limits: ReadLimits,
+
+// Track iteration count for current container.
+iteration_depth: u32 = 0,
+iteration_count: usize = 0,
+
 /// Initializes the reader.
-pub fn init(bytes: []const u8) Reader {
-    return Reader{ .bytes = bytes };
+pub fn init(bytes: []const u8, limits: ReadLimits) Reader {
+    return Reader{ .bytes = bytes, .limits = limits };
 }
 
 /// Reads a single data item of given type and advances the position.
@@ -59,10 +81,16 @@ pub fn read(self: *Reader) !common.Value {
             return .{ .containerEnd = self.depth };
         },
         .object => {
+            if (self.limits.max_depth) |max| {
+                if (self.depth >= max) return error.MaxDepthExceeded;
+            }
             self.depth += 1;
             return .{ .object = self.depth };
         },
         .array => {
+            if (self.limits.max_depth) |max| {
+                if (self.depth >= max) return error.MaxDepthExceeded;
+            }
             self.depth += 1;
             return .{ .array = self.depth };
         },
@@ -138,6 +166,11 @@ pub fn read(self: *Reader) !common.Value {
             self.pos += size_len;
             const len = common.decodeVarInt(intBytes);
 
+            // Check length limit
+            if (self.limits.max_bytes_length) |max| {
+                if (len > max) return error.BytesTooLong;
+            }
+
             if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
@@ -146,6 +179,12 @@ pub fn read(self: *Reader) !common.Value {
         },
         .bytes => {
             const len = try self.readBytes(u64);
+
+            // Check length limit
+            if (self.limits.max_bytes_length) |max| {
+                if (len > max) return error.BytesTooLong;
+            }
+
             if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const str_ptr = self.pos;
@@ -167,10 +206,22 @@ pub fn iterateObject(self: *Reader, obj: common.Value) !?KeyValuePair {
     std.debug.assert(obj == .object);
     try self.discardUntilDepth(obj.object);
 
+    // Reset count when entering a new container
+    if (self.iteration_depth != obj.object) {
+        self.iteration_depth = obj.object;
+        self.iteration_count = 0;
+    }
+
     const key = try self.read();
     if (key == .containerEnd) return null;
 
     const value = try self.read();
+
+    // Check limit
+    if (self.limits.max_object_size) |max| {
+        self.iteration_count += 1;
+        if (self.iteration_count > max) return error.ObjectTooLarge;
+    }
 
     return .{ .key = key, .value = value };
 }
@@ -180,8 +231,20 @@ pub fn iterateArray(self: *Reader, arr: common.Value) !?common.Value {
     std.debug.assert(arr == .array);
     try self.discardUntilDepth(arr.array);
 
+    // Reset count when entering a new container
+    if (self.iteration_depth != arr.array) {
+        self.iteration_depth = arr.array;
+        self.iteration_count = 0;
+    }
+
     const value = try self.read();
     if (value == .containerEnd) return null;
+
+    // Check limit
+    if (self.limits.max_array_length) |max| {
+        self.iteration_count += 1;
+        if (self.iteration_count > max) return error.ArrayTooLarge;
+    }
 
     return value;
 }
