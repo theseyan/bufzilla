@@ -91,21 +91,21 @@ pub fn printValue(self: *Inspect, val: common.Value, depth: u32) !void {
             try self.writer.writeByte(']');
         },
         .f64 => {
-            var buf: [128]u8 = undefined;
-            try self.writer.writeAll(try std.fmt.formatFloat(&buf, val.f64, .{ .precision = self.options.float_precision, .mode = .decimal }));
+            var buf: [std.fmt.float.bufferSize(.decimal, f64)]u8 = undefined;
+            try self.writer.writeAll(try std.fmt.float.render(&buf, val.f64, .{ .precision = self.options.float_precision, .mode = .decimal }));
         },
         .f32 => {
-            var buf: [128]u8 = undefined;
-            try self.writer.writeAll(try std.fmt.formatFloat(&buf, val.f32, .{ .precision = self.options.float_precision, .mode = .decimal }));
+            var buf: [std.fmt.float.bufferSize(.decimal, f32)]u8 = undefined;
+            try self.writer.writeAll(try std.fmt.float.render(&buf, val.f32, .{ .precision = self.options.float_precision, .mode = .decimal }));
         },
-        .i64 => try std.fmt.formatInt(val.i64, 10, .lower, .{}, self.writer),
-        .i32 => try std.fmt.formatInt(val.i32, 10, .lower, .{}, self.writer),
-        .i16 => try std.fmt.formatInt(val.i16, 10, .lower, .{}, self.writer),
-        .i8 => try std.fmt.formatInt(val.i8, 10, .lower, .{}, self.writer),
-        .u64 => try std.fmt.formatInt(val.u64, 10, .lower, .{}, self.writer),
-        .u32 => try std.fmt.formatInt(val.u32, 10, .lower, .{}, self.writer),
-        .u16 => try std.fmt.formatInt(val.u16, 10, .lower, .{}, self.writer),
-        .u8 => try std.fmt.formatInt(val.u8, 10, .lower, .{}, self.writer),
+        .i64 => try self.writer.print("{d}", .{val.i64}),
+        .i32 => try self.writer.print("{d}", .{val.i32}),
+        .i16 => try self.writer.print("{d}", .{val.i16}),
+        .i8 => try self.writer.print("{d}", .{val.i8}),
+        .u64 => try self.writer.print("{d}", .{val.u64}),
+        .u32 => try self.writer.print("{d}", .{val.u32}),
+        .u16 => try self.writer.print("{d}", .{val.u16}),
+        .u8 => try self.writer.print("{d}", .{val.u8}),
         .bool => try self.writer.writeAll(if (val.bool) "true" else "false"),
         .bytes => try self.writeString(val.bytes),
         .varIntBytes => try self.writeString(val.varIntBytes),

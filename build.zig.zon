@@ -2,7 +2,7 @@
     .name = .bufzilla,
     .fingerprint = 0xd06d6ca25e9d4e81,
     .version = "0.2.0",
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.2",
 
     .dependencies = .{},
 

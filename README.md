@@ -17,7 +17,7 @@ bufzilla is ideal for serializing JSON-like objects and arrays, and has the foll
 
 ## Installation
 
-- Zig version: `0.14`
+- Zig version: `0.15.2`
 
 ```sh
 zig fetch https://github.com/theseyan/bufzilla/archive/refs/tags/{VERSION}.tar.gz

@@ -92,9 +92,9 @@ test "reader: simple" {
 }
 
 test "inspect api" {
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    var writer = buf.writer();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+    var writer = buf.writer(std.testing.allocator);
 
     var inspector = Inspect.init(buf1[0..buf1_len], &writer, .{});
     try inspector.inspect();

@@ -9,14 +9,12 @@ raw: std.ArrayList(u8),
 
 /// Initializes the writer.
 pub fn init(allocator: std.mem.Allocator) Writer {
-    const arraylist = std.ArrayList(u8).init(allocator);
-
-    return Writer{ .allocator = allocator, .raw = arraylist };
+    return Writer{ .allocator = allocator, .raw = .empty };
 }
 
 /// Writes a single data item to the underlying array list.
 pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(common.Value)) !void {
-    const writer = self.raw.writer();
+    const writer = self.raw.writer(self.allocator);
 
     // Write value
     switch (comptime tag) {
@@ -28,7 +26,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try writer.writeInt(u8, tag_byte, .little);
 
             // Write varint bytes
-            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
+            try self.raw.appendSlice(self.allocator, varint.bytes[0 .. varint.size + 1]);
         },
         .varIntSigned => {
             const varint = common.encodeVarInt(common.encodeZigZag(data.varIntSigned));
@@ -38,13 +36,13 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try writer.writeInt(u8, tag_byte, .little);
 
             // Write varint bytes
-            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
+            try self.raw.appendSlice(self.allocator, varint.bytes[0 .. varint.size + 1]);
         },
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
 
             // Grow arraylist in one step if needed
-            try self.raw.ensureUnusedCapacity(1 + (varint.size + 1) + data.varIntBytes.len);
+            try self.raw.ensureUnusedCapacity(self.allocator, 1 + (varint.size + 1) + data.varIntBytes.len);
 
             // Write tag byte
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
@@ -80,7 +78,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
                     try writer.writeInt(u64, data.bytes.len, .little);
 
                     // Write bytes
-                    try self.raw.appendSlice(data.bytes);
+                    try self.raw.appendSlice(self.allocator, data.bytes);
                 },
                 else => unreachable,
             }
@@ -236,10 +234,10 @@ pub fn bytes(self: *Writer) []u8 {
 /// Caller is responsible for freeing the returned memory.
 /// This function makes it unnecessary to call `deinit`.
 pub fn toOwnedSlice(self: *Writer) ![]u8 {
-    return try self.raw.toOwnedSlice();
+    return try self.raw.toOwnedSlice(self.allocator);
 }
 
 /// Deinitializes the writer.
 pub fn deinit(self: *Writer) void {
-    self.raw.deinit();
+    self.raw.deinit(self.allocator);
 }

@@ -11,13 +11,15 @@ pub fn build(b: *std.Build) void {
 
     // Unit tests
     const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("test/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/main.zig"),
+            .imports = &.{.{ .name = "bufzilla", .module = bufzilla }},
+            .target = target,
+            .optimize = optimize,
+        }),
         .use_lld = !no_llvm and target.result.os.tag != .macos,
         .use_llvm = !no_llvm,
     });
-    exe_unit_tests.root_module.addImport("bufzilla", bufzilla);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     b.step("test", "Run unit tests").dependOn(&run_exe_unit_tests.step);
