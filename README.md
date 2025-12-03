@@ -226,7 +226,7 @@ The `Inspect` API also accepts limits as a parameter:
 var inspector = Inspect(.{ .max_depth = 100 }).init(data, &writer, .{});
 ```
 
-### Gotchas
+## Gotchas
 
 - As a self-describing format, field names (keys) are present in the encoded result which can inflate the encoded size compared to other schemaful encoding formats.
 
@@ -241,6 +241,10 @@ zig build test
 ## Benchmarks
 
 Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=ReleaseFast`.
+
+**bufzilla is competitive in performance with similar self-describing binary formats, and in most cases, much faster.**
+![Benchmark Comparison](misc/bench.png)
+*Avg. throughput (ops/sec): [bufzilla](https://github.com/theseyan/bufzilla) vs [zbor](https://github.com/r4gus/zbor) vs [zig-msgpack](https://github.com/zigcc/zig-msgpack)*
 
 Results on x86_64 Linux, Ryzen 7 9700X CPU:
 ```
