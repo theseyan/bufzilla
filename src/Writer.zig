@@ -26,19 +26,19 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             const varint = common.encodeVarInt(data.varIntUnsigned);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. varint.size + 1]);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
         },
         .varIntSigned => {
             const varint = common.encodeVarInt(common.encodeZigZag(data.varIntSigned));
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. varint.size + 1]);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
         },
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. varint.size + 1]);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
             try w.writeAll(data.varIntBytes);
         },
         .bool => {

@@ -449,3 +449,49 @@ test "inspect: valid UTF-8 with multibyte chars works" {
 
     try std.testing.expectEqualStrings("\"héllo 世界 🎉\"", out_fixed.buffered());
 }
+
+// =============================================================================
+// Integer Tests
+// =============================================================================
+
+test "writer/reader: i64 max value" {
+    var buffer: [100]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    const val: i64 = 9223372036854775807; // i64 max
+    try writer.writeAny(val);
+
+    const written = fixed.buffered();
+    var reader = Reader.init(written);
+    const read_val = try reader.read();
+    try std.testing.expectEqual(val, read_val.i64);
+}
+
+test "writer/reader: i64 min value" {
+    var buffer: [100]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    const val: i64 = -9223372036854775808; // i64 min
+    try writer.writeAny(val);
+
+    const written = fixed.buffered();
+    var reader = Reader.init(written);
+    const read_val = try reader.read();
+    try std.testing.expectEqual(val, read_val.i64);
+}
+
+test "writer/reader: u64 max value" {
+    var buffer: [100]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    const val: u64 = 18446744073709551615; // u64 max
+    try writer.writeAny(val);
+
+    const written = fixed.buffered();
+    var reader = Reader.init(written);
+    const read_val = try reader.read();
+    try std.testing.expectEqual(val, read_val.u64);
+}
