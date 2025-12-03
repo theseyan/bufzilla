@@ -146,7 +146,23 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .@"struct" => |struct_info| {
             try self.startObject();
             inline for (struct_info.fields) |field| {
-                try self.write(common.Value{ .varIntBytes = field.name }, .varIntBytes);
+                // Precompute encoded key prefix
+                const key_prefix = comptime blk: {
+                    const varint = common.encodeVarInt(field.name.len);
+                    const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
+                    const len_size: usize = @as(usize, varint.size) + 1;
+                    var prefix: [1 + 8 + field.name.len]u8 = undefined;
+                    prefix[0] = tag_byte;
+                    for (0..len_size) |i| {
+                        prefix[1 + i] = varint.bytes[i];
+                    }
+                    // Include the field name in the prefix
+                    for (0..field.name.len) |i| {
+                        prefix[1 + len_size + i] = field.name[i];
+                    }
+                    break :blk prefix[0 .. 1 + len_size + field.name.len].*;
+                };
+                try self.raw.writeAll(&key_prefix);
                 const val = @field(data, field.name);
                 try self.writeAnyExplicit(@TypeOf(val), val);
             }
