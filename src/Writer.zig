@@ -1,86 +1,68 @@
 /// Writer API
 const std = @import("std");
 const common = @import("common.zig");
+const Io = std.Io;
 
 const Writer = @This();
 
-allocator: std.mem.Allocator,
-raw: std.ArrayList(u8),
+/// The underlying Writer.
+raw: *Io.Writer,
 
-/// Initializes the writer.
-pub fn init(allocator: std.mem.Allocator) Writer {
-    const arraylist = std.ArrayList(u8).init(allocator);
+/// Error type for write operations.
+pub const Error = Io.Writer.Error;
 
-    return Writer{ .allocator = allocator, .raw = arraylist };
+/// Initializes the writer with an std.Io.Writer.
+/// The caller is responsible for managing the writer's lifecycle (flushing, freeing, etc.)
+pub fn init(writer: *Io.Writer) Writer {
+    return .{ .raw = writer };
 }
 
-/// Writes a single data item to the underlying array list.
-pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(common.Value)) !void {
-    const writer = self.raw.writer();
+/// Writes a single data item to the underlying writer.
+pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(common.Value)) Error!void {
+    const w = self.raw;
 
-    // Write value
     switch (comptime tag) {
         .varIntUnsigned => {
             const varint = common.encodeVarInt(data.varIntUnsigned);
-
-            // Write tag byte
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try writer.writeInt(u8, tag_byte, .little);
-
-            // Write varint bytes
-            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
+            try w.writeByte(tag_byte);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
         },
         .varIntSigned => {
             const varint = common.encodeVarInt(common.encodeZigZag(data.varIntSigned));
-
-            // Write tag byte
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try writer.writeInt(u8, tag_byte, .little);
-
-            // Write varint bytes
-            try self.raw.appendSlice(varint.bytes[0 .. varint.size + 1]);
+            try w.writeByte(tag_byte);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
         },
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
-
-            // Grow arraylist in one step if needed
-            try self.raw.ensureUnusedCapacity(1 + (varint.size + 1) + data.varIntBytes.len);
-
-            // Write tag byte
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try writer.writeInt(u8, tag_byte, .little);
-
-            // Write bytes length
-            self.raw.appendSliceAssumeCapacity(varint.bytes[0 .. varint.size + 1]);
-
-            // Write bytes
-            self.raw.appendSliceAssumeCapacity(data.varIntBytes);
+            try w.writeByte(tag_byte);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            try w.writeAll(data.varIntBytes);
         },
         .bool => {
             const val = @intFromBool(data.bool);
-            try writer.writeInt(u8, common.encodeTag(@intFromEnum(data), val), .little);
+            try w.writeByte(common.encodeTag(@intFromEnum(data), val));
         },
         else => {
-            try writer.writeInt(u8, common.encodeTag(@intFromEnum(data), 0), .little);
+            try w.writeByte(common.encodeTag(@intFromEnum(data), 0));
 
             switch (comptime tag) {
-                .u64 => try writer.writeInt(u64, data.u64, .little),
-                .u32 => try writer.writeInt(u32, data.u32, .little),
-                .u16 => try writer.writeInt(u16, data.u16, .little),
-                .u8 => try writer.writeInt(u8, data.u8, .little),
-                .i64 => try writer.writeInt(i64, data.i64, .little),
-                .i32 => try writer.writeInt(i32, data.i32, .little),
-                .i16 => try writer.writeInt(i16, data.i16, .little),
-                .i8 => try writer.writeInt(i8, data.i8, .little),
-                .f64 => try writer.writeInt(u64, @bitCast(data.f64), .little),
-                .f32 => try writer.writeInt(u32, @bitCast(data.f32), .little),
+                .u64 => try w.writeInt(u64, data.u64, .little),
+                .u32 => try w.writeInt(u32, data.u32, .little),
+                .u16 => try w.writeInt(u16, data.u16, .little),
+                .u8 => try w.writeInt(u8, data.u8, .little),
+                .i64 => try w.writeInt(i64, data.i64, .little),
+                .i32 => try w.writeInt(i32, data.i32, .little),
+                .i16 => try w.writeInt(i16, data.i16, .little),
+                .i8 => try w.writeInt(i8, data.i8, .little),
+                .f64 => try w.writeInt(u64, @bitCast(data.f64), .little),
+                .f32 => try w.writeInt(u32, @bitCast(data.f32), .little),
                 .object, .array, .containerEnd, .null => {},
                 .bytes => {
-                    // Write bytes length
-                    try writer.writeInt(u64, data.bytes.len, .little);
-
-                    // Write bytes
-                    try self.raw.appendSlice(data.bytes);
+                    try w.writeInt(u64, data.bytes.len, .little);
+                    try w.writeAll(data.bytes);
                 },
                 else => unreachable,
             }
@@ -90,29 +72,21 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
 
 /// Write any of the supported primitive data types.
 /// Serializes structs and arrays recursively.
-pub fn writeAny(self: *Writer, value: anytype) !void {
+pub fn writeAny(self: *Writer, value: anytype) Error!void {
     const T = @TypeOf(value);
     try self.writeAnyExplicit(T, value);
 }
 
 /// Writes an item when type is known at comptime, but value may be runtime-known.
-pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
+pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
     switch (@typeInfo(T)) {
         .comptime_int => try self.writeAnyExplicit(i64, @intCast(data)),
         .comptime_float => try self.writeAnyExplicit(f64, @floatCast(data)),
         .int => switch (T) {
-            // u64 => try self.write(common.Value{ .u64 = data }, .u64),
-            // u32 => try self.write(common.Value{ .u32 = data }, .u32),
-            // u16 => try self.write(common.Value{ .u16 = data }, .u16),
-            // u8 => try self.write(common.Value{ .u8 = data }, .u8),
             u64 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u32 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u16 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u8 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            // i64 => try self.write(common.Value{ .i64 = data }, .i64),
-            // i32 => try self.write(common.Value{ .i32 = data }, .i32),
-            // i16 => try self.write(common.Value{ .i16 = data }, .i16),
-            // i8 => try self.write(common.Value{ .i8 = data }, .i8),
             i64 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
             i32 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
             i16 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
@@ -145,24 +119,50 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
                 }
                 try self.endContainer();
             } else if (ptr_info.size == .one) {
-                // support null-terminated string pointers
+                // pointer to single item - dereference and encode
                 switch (@typeInfo(ptr_info.child)) {
                     .array => |arr| {
-                        if (arr.child == u8 and arr.sentinel() != null) {
+                        if (arr.child == u8) {
+                            // pointer to byte array - write as bytes
                             try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                        } else {
+                            // pointer to array of other types - write as array
+                            try self.startArray();
+                            for (data) |item| {
+                                try self.writeAnyExplicit(@TypeOf(item), item);
+                            }
+                            try self.endContainer();
                         }
                     },
-                    else => @compileError("bufzilla: unsupported pointer type: " ++ @typeName(T)),
+                    else => {
+                        // pointer to single value - dereference and write
+                        try self.writeAnyExplicit(ptr_info.child, data.*);
+                    },
                 }
             } else {
-                // std.debug.print("bufzilla: cannot serialize pointer type: {any} {s}\n", .{ptr_info.size, @typeName(ptr_info.child)});
                 @compileError("bufzilla: unsupported pointer type: " ++ @typeName(T));
             }
         },
         .@"struct" => |struct_info| {
             try self.startObject();
             inline for (struct_info.fields) |field| {
-                try self.write(common.Value{ .varIntBytes = field.name }, .varIntBytes);
+                // Precompute encoded key prefix
+                const key_prefix = comptime blk: {
+                    const varint = common.encodeVarInt(field.name.len);
+                    const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
+                    const len_size: usize = @as(usize, varint.size) + 1;
+                    var prefix: [1 + 8 + field.name.len]u8 = undefined;
+                    prefix[0] = tag_byte;
+                    for (0..len_size) |i| {
+                        prefix[1 + i] = varint.bytes[i];
+                    }
+                    // Include the field name in the prefix
+                    for (0..field.name.len) |i| {
+                        prefix[1 + len_size + i] = field.name[i];
+                    }
+                    break :blk prefix[0 .. 1 + len_size + field.name.len].*;
+                };
+                try self.raw.writeAll(&key_prefix);
                 const val = @field(data, field.name);
                 try self.writeAnyExplicit(@TypeOf(val), val);
             }
@@ -199,47 +199,23 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) !void {
             }
         },
         .void => {},
-        else => |info| {
-            _ = info;
-            // std.debug.print("bufzilla: cannot serialize type: {any} | {s}\n", .{info, @typeName(T)});
+        else => {
             @compileError("bufzilla: unsupported data type: " ++ @typeName(T));
         },
     }
 }
 
 /// Writes an array tag.
-pub inline fn startArray(self: *Writer) !void {
+pub inline fn startArray(self: *Writer) Error!void {
     try self.write(common.Value{ .array = undefined }, .array);
 }
 
 /// Writes an object tag.
-pub inline fn startObject(self: *Writer) !void {
+pub inline fn startObject(self: *Writer) Error!void {
     try self.write(common.Value{ .object = undefined }, .object);
 }
 
 /// Writes a container end marker.
-pub inline fn endContainer(self: *Writer) !void {
+pub inline fn endContainer(self: *Writer) Error!void {
     try self.write(common.Value{ .containerEnd = undefined }, .containerEnd);
-}
-
-/// Number of bytes written.
-pub fn len(self: *Writer) usize {
-    return self.raw.items.len;
-}
-
-/// Returns the underlying bytes.
-pub fn bytes(self: *Writer) []u8 {
-    return self.raw.items;
-}
-
-/// Returns the serialized data as an owned slice.
-/// Caller is responsible for freeing the returned memory.
-/// This function makes it unnecessary to call `deinit`.
-pub fn toOwnedSlice(self: *Writer) ![]u8 {
-    return try self.raw.toOwnedSlice();
-}
-
-/// Deinitializes the writer.
-pub fn deinit(self: *Writer) void {
-    self.raw.deinit();
 }

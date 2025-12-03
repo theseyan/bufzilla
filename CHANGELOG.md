@@ -1,3 +1,36 @@
+# v0.3.0
+
+- Upgrade to Zig 0.15.2
+- `Writer` now accepts a `*std.Io.Writer` instead of an allocator. This enables:
+  - Writing to dynamically growing buffers via `std.Io.Writer.Allocating`
+  - Writing to fixed buffers via `std.Io.Writer.fixed()` (zero allocation)
+  - Streaming directly to files, sockets, or any custom writer
+- `Inspect` now accepts a `*std.Io.Writer` instead of the deprecated `std.io.AnyWriter`.
+- Removed `Writer.deinit()`, `Writer.bytes()`, `Writer.len()`, `Writer.toOwnedSlice()` in favor of `std.Io.Writer`.
+
+### Safety
+- Added configurable `ReadLimits` with the following options:
+  - `max_depth`: maximum nesting depth for containers
+  - `max_bytes_length`: maximum string/binary blob size
+  - `max_array_length`: maximum array element count
+  - `max_object_size`: maximum object key-value pair count
+- New errors: `MaxDepthExceeded`, `BytesTooLong`, `ArrayTooLarge`, `ObjectTooLarge`.
+- `Inspect.printValue` now returns `NonFiniteFloat` error for NaN and Infinity float value.
+
+### Benchmarks
+- A benchmark suite has been added (mostly ported from [zig-msgpack](https://github.com/zigcc/zig-msgpack)).
+
+### Bugfixes and Optimizations
+- Fix integer overflow in `Reader` bounds checks that could bypass validation with malicious length values.
+- Fix `Reader` depth underflow when encountering `containerEnd` at depth 0.
+- Fix `Reader` float decoding to use little-endian byte order always.
+- Fix `Inspect` JSON output to escape all control characters (0x00-0x1F).
+- Fix `encodeVarInt` computing wrong size on big-endian machines.
+- `Inspect` now returns `error.InvalidUtf8` for non-UTF-8 byte sequences instead of producing invalid JSON.
+- Fix integer overflow in `Writer.write` when writing extremely large integers.
+- Fix `Writer.writeAny` silently dropping pointer-to-array values like `&[_]u8{1,2,3}` (data loss).
+- Optimize: pre-compute key field for struct serialization. 
+
 # v0.2.1
 - Compatible with Zig 0.14.1
 - Fix an issue in `build.zig` preventing compilation in macOS hosts.

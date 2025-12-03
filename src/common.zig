@@ -47,10 +47,8 @@ pub const Value = union(enum) {
 /// Encodes a 64-bit unsigned integer to a 8-byte buffer in variable length format.
 /// The number of bytes written is reduced by 1 to fit into 3-bits.
 pub fn encodeVarInt(val: u64) struct { bytes: [8]u8, size: u3 } {
-    const little = std.mem.nativeToLittle(u64, val);
-    const bytes: [8]u8 = @bitCast(little);
-
-    return .{ .bytes = bytes, .size = if (val == 0) 0 else @truncate(((64 - @clz(little) + 7) / 8) - 1) };
+    const bytes: [8]u8 = @bitCast(std.mem.nativeToLittle(u64, val));
+    return .{ .bytes = bytes, .size = if (val == 0) 0 else @truncate(((64 - @clz(val) + 7) / 8) - 1) };
 }
 
 /// Decodes a variable length integer from a buffer.

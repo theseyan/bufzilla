@@ -2,22 +2,23 @@
 
 _buffer • zilla_
 
-A simple and fast **binary encoding format** in pure Zig.
+A compact and fast **binary encoding format** in pure Zig.
 Originally based on rxi's article - ["A Simple Serialization System"](https://rxi.github.io/a_simple_serialization_system.html).
 
 bufzilla is ideal for serializing JSON-like objects and arrays, and has the following qualities:
 
 - **Portable** across endianness and architectures.
-- **Schemaless**, fully self-describing format; no "pre-compilation" is necessary.
+- **Schemaless**, fully self-describing format; no "pre-compilation" step is necessary.
 - **Zero-copy** reads directly from the encoded bytes.
 - **Variable length integer encoding** enabled by default, no wasted bytes.
+- **Safety** against untrusted inputs with configurable, zero-overhead parsing limits.
 - Data can be read _linearly_ without any intermediate representation (eg. trees).
-- Printing encoded objects as JSON via `Inspect` API.
+- Format encoded objects as JSON via `Inspect` API.
 - Serialize Zig structs and data types recursively.
 
 ## Installation
 
-- Zig version: `0.14`
+- Zig version: `0.15.2`
 
 ```sh
 zig fetch https://github.com/theseyan/bufzilla/archive/refs/tags/{VERSION}.tar.gz
@@ -38,23 +39,34 @@ Copy the hash generated and add `bufzilla` to your `build.zig.zon`:
 
 ## Usage
 
-The `Writer.writeAny` function can serialize primitive data types as well as Zig structs and tuples. Coupled with the `Writer.startObject`, `Writer.startArray` and `Writer.endContainer` functions, it can be used to incrementally build a message as well.
+bufzilla simply takes a `std.Io.Writer` interface, and writes encoded data to it. Such a writer can be backed by a growing buffer, a fixed array, a file, or a network socket, etc.
+
+### Writing to a dynamic buffer
+
+Use `std.Io.Writer.Allocating` when you need a dynamically growing buffer:
+
 ```zig
+const std = @import("std");
+const Io = std.Io;
 const Writer = @import("bufzilla").Writer;
 
-var writer = Writer.init(std.heap.c_allocator);
-defer writer.deinit();
+// Create an allocating writer
+var aw = Io.Writer.Allocating.init(allocator);
+defer aw.deinit();
+
+// Initialize bufzilla writer
+var writer = Writer.init(&aw.writer);
 
 const DataType = struct {
     a: i64,
     b: struct {
         c: bool,
     },
-    d: []const union (enum) {
+    d: []const union(enum) {
         null: ?void,
         f64: f64,
         string: []const u8,
-    }
+    },
 };
 
 const data = DataType{
@@ -64,25 +76,75 @@ const data = DataType{
 };
 
 try writer.writeAny(data);
-try std.debug.print("{}", .{ writer.bytes() });
+
+// Get the encoded bytes
+const encoded = aw.written();
+std.debug.print("Encoded {d} bytes\n", .{encoded.len});
 ```
 
-Let's print out the object as a JSON string via `Inspect` API.
+### Writing to a fixed buffer
+
+Use `std.Io.Writer.fixed` to prevent dynamic allocations when you know the maximum size upfront:
+
+```zig
+var buffer: [1024]u8 = undefined;
+var fixed = Io.Writer.fixed(&buffer);
+
+var writer = Writer.init(&fixed);
+try writer.writeAny("hello");
+try writer.writeAny(@as(i64, 42));
+
+const encoded = fixed.buffered();
+```
+
+### Incremental writing
+
+You can also build messages incrementally:
+
+```zig
+var writer = Writer.init(&aw.writer);
+
+try writer.startObject();
+try writer.writeAny("name");
+try writer.writeAny("Alice");
+try writer.writeAny("scores");
+try writer.startArray();
+try writer.writeAny(@as(i64, 100));
+try writer.writeAny(@as(i64, 95));
+try writer.endContainer(); // end array
+try writer.endContainer(); // end object
+```
+
+### Inspecting encoded data as JSON
+
+The `Inspect` API renders encoded bufzilla data as pretty-printed JSON:
 
 ```zig
 const Inspect = @import("bufzilla").Inspect;
 
-var buf = std.ArrayList(u8).init(std.testing.allocator);
-defer buf.deinit();
-var writer = buf.writer();
+// Output to an allocating writer
+var aw = Io.Writer.Allocating.init(allocator);
+defer aw.deinit();
 
-var inspector = Inspect.init(&encoded_bytes, &writer, .{});
-try inspector.inspect(); // Writes the JSON string to `buf`
+var inspector = Inspect(.{}).init(encoded_bytes, &aw.writer, .{});
+try inspector.inspect();
 
-std.debug.print("{s}", .{ buf.items });
+std.debug.print("{s}\n", .{aw.written()});
 ```
 
-which prints the following JSON:
+Or output directly to a fixed buffer:
+
+```zig
+var buffer: [4096]u8 = undefined;
+var fixed = Io.Writer.fixed(&buffer);
+
+var inspector = Inspect(.{}).init(encoded_bytes, &fixed, .{});
+try inspector.inspect();
+
+std.debug.print("{s}\n", .{fixed.buffered()});
+```
+
+Output:
 
 ```json
 {
@@ -98,15 +160,79 @@ which prints the following JSON:
 }
 ```
 
-You can find more examples of usage in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
+### Reading encoded data
 
-### Caveats
+The `Reader` provides zero-copy access to encoded data:
 
-- As a self-describing format, field names (keys) are present in the encoded result which can inflate the encoded size.
+```zig
+const Reader = @import("bufzilla").Reader;
+
+var reader = Reader(.{}).init(encoded_bytes);
+
+// Read values sequentially
+const val = try reader.read();
+switch (val) {
+    .object => { /* iterate object */ },
+    .array => { /* iterate array */ },
+    .i64 => |n| std.debug.print("int: {d}\n", .{n}),
+    .bytes => |s| std.debug.print("string: {s}\n", .{s}),
+    // ... other types
+}
+
+// Or iterate containers
+while (try reader.iterateObject(obj)) |kv| {
+    // kv.key and kv.value
+}
+```
+
+You can find more examples in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
+
+### Safety & Security
+
+When reading untrusted data, bufzilla provides configurable limits at compile time to prevent infinite recursion/stack overflow errors, with negligible performance loss.
+
+```zig
+const Reader = @import("bufzilla").Reader;
+
+// Default limits
+var reader = Reader(.{}).init(data);
+
+// Custom limits
+var reader = Reader(.{
+    .max_depth = 50,                    // Max nesting depth
+    .max_bytes_length = 1024 * 1024,    // Max string/binary blob size
+    .max_array_length = 10_000,         // Max array elements
+    .max_object_size = 10_000,          // Max object key-value pairs
+}).init(data);
+
+// Unlimited depth
+var reader = Reader(.{ .max_depth = null }).init(data);
+```
+
+| Limit | Default | Error |
+|-------|---------|-------|
+| `max_depth` | 2048 | `MaxDepthExceeded` |
+| `max_bytes_length` | unlimited | `BytesTooLong` |
+| `max_array_length` | unlimited | `ArrayTooLarge` |
+| `max_object_size` | unlimited | `ObjectTooLarge` |
+
+**Notes:**
+- `max_array_length` and `max_object_size` require `max_depth` to be set. Setting them with `max_depth = null` is a compile error.
+- Reader internally allocates a stack buffer of size `max_depth` for iteration counters when array/object limits are enabled. Keep `max_depth` reasonable (default 2048 uses ~16KB).
+
+The `Inspect` API also accepts limits as a parameter:
+
+```zig
+var inspector = Inspect(.{ .max_depth = 100 }).init(data, &writer, .{});
+```
+
+### Gotchas
+
+- As a self-describing format, field names (keys) are present in the encoded result which can inflate the encoded size compared to other schemaful encoding formats.
 
 ## Testing
 
-Unit tests are present in the `test/` directory.
+Comprehensive unit tests are present in the `test/` directory.
 
 ```bash
 zig build test
@@ -114,4 +240,62 @@ zig build test
 
 ## Benchmarks
 
-TODO
+Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=ReleaseFast`.
+
+Results on x86_64 Linux, Ryzen 7 9700X CPU:
+```
+Basic Types:
+--------------------------------------------------------------------------------
+                              Null Write |  1000000 iterations |        0 ns/op |        0 ops/sec
+                               Null Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                              Bool Write |  1000000 iterations |        0 ns/op |        0 ops/sec
+                               Bool Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                         Small Int Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                          Small Int Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                         Large Int Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                          Large Int Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                             Float Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                              Float Read |  1000000 iterations |        1 ns/op | 1000000000 ops/sec
+
+Strings:
+--------------------------------------------------------------------------------
+            Short String Write (5 bytes) |   500000 iterations |        4 ns/op | 250000000 ops/sec
+             Short String Read (5 bytes) |   500000 iterations |        2 ns/op | 500000000 ops/sec
+        Medium String Write (~300 bytes) |   100000 iterations |        4 ns/op | 250000000 ops/sec
+         Medium String Read (~300 bytes) |   100000 iterations |        2 ns/op | 500000000 ops/sec
+
+Binary Data:
+--------------------------------------------------------------------------------
+           Small Binary Write (32 bytes) |   500000 iterations |        6 ns/op | 166666666 ops/sec
+            Small Binary Read (32 bytes) |   500000 iterations |        2 ns/op | 500000000 ops/sec
+                Large Binary Write (1KB) |   100000 iterations |        9 ns/op | 111111111 ops/sec
+                 Large Binary Read (1KB) |   100000 iterations |        2 ns/op | 500000000 ops/sec
+
+Arrays:
+--------------------------------------------------------------------------------
+         Small Array Write (10 elements) |   100000 iterations |       25 ns/op | 40000000 ops/sec
+          Small Array Read (10 elements) |   100000 iterations |       27 ns/op | 37037037 ops/sec
+       Medium Array Write (100 elements) |    50000 iterations |      260 ns/op |  3846153 ops/sec
+        Medium Array Read (100 elements) |    50000 iterations |      243 ns/op |  4115226 ops/sec
+
+Objects (Maps):
+--------------------------------------------------------------------------------
+         Small Object Write (10 entries) |   100000 iterations |      143 ns/op |  6993006 ops/sec
+          Small Object Read (10 entries) |   100000 iterations |      116 ns/op |  8620689 ops/sec
+        Medium Object Write (50 entries) |    50000 iterations |      712 ns/op |  1404494 ops/sec
+         Medium Object Read (50 entries) |    50000 iterations |      629 ns/op |  1589825 ops/sec
+
+Complex Structures:
+--------------------------------------------------------------------------------
+                  Nested Structure Write |    50000 iterations |       36 ns/op | 27777777 ops/sec
+                   Nested Structure Read |    50000 iterations |       71 ns/op | 14084507 ops/sec
+                       Mixed Types Write |    50000 iterations |       31 ns/op | 32258064 ops/sec
+                        Mixed Types Read |    50000 iterations |       57 ns/op | 17543859 ops/sec
+
+Struct Serialization:
+--------------------------------------------------------------------------------
+                     Simple Struct Write |   100000 iterations |       29 ns/op | 34482758 ops/sec
+                      Simple Struct Read |   100000 iterations |       46 ns/op | 21739130 ops/sec
+                    Complex Struct Write |    50000 iterations |      136 ns/op |  7352941 ops/sec
+                     Complex Struct Read |    50000 iterations |      272 ns/op |  3676470 ops/sec
+```
