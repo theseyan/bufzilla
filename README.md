@@ -200,4 +200,62 @@ zig build test
 
 ## Benchmarks
 
-TODO
+Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=ReleaseFast`.
+
+Results on x86_64 Linux, Ryzen 7 9700X CPU:
+```
+Basic Types:
+--------------------------------------------------------------------------------
+                              Null Write |  1000000 iterations |        0 ns/op |        0 ops/sec
+                               Null Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                              Bool Write |  1000000 iterations |        0 ns/op |        0 ops/sec
+                               Bool Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                         Small Int Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                          Small Int Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                         Large Int Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                          Large Int Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                             Float Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
+                              Float Read |  1000000 iterations |        1 ns/op | 1000000000 ops/sec
+
+Strings:
+--------------------------------------------------------------------------------
+            Short String Write (5 bytes) |   500000 iterations |        4 ns/op | 250000000 ops/sec
+             Short String Read (5 bytes) |   500000 iterations |        2 ns/op | 500000000 ops/sec
+        Medium String Write (~300 bytes) |   100000 iterations |        4 ns/op | 250000000 ops/sec
+         Medium String Read (~300 bytes) |   100000 iterations |        2 ns/op | 500000000 ops/sec
+
+Binary Data:
+--------------------------------------------------------------------------------
+           Small Binary Write (32 bytes) |   500000 iterations |        6 ns/op | 166666666 ops/sec
+            Small Binary Read (32 bytes) |   500000 iterations |        2 ns/op | 500000000 ops/sec
+                Large Binary Write (1KB) |   100000 iterations |        9 ns/op | 111111111 ops/sec
+                 Large Binary Read (1KB) |   100000 iterations |        2 ns/op | 500000000 ops/sec
+
+Arrays:
+--------------------------------------------------------------------------------
+         Small Array Write (10 elements) |   100000 iterations |       25 ns/op | 40000000 ops/sec
+          Small Array Read (10 elements) |   100000 iterations |       27 ns/op | 37037037 ops/sec
+       Medium Array Write (100 elements) |    50000 iterations |      260 ns/op |  3846153 ops/sec
+        Medium Array Read (100 elements) |    50000 iterations |      243 ns/op |  4115226 ops/sec
+
+Objects (Maps):
+--------------------------------------------------------------------------------
+         Small Object Write (10 entries) |   100000 iterations |      143 ns/op |  6993006 ops/sec
+          Small Object Read (10 entries) |   100000 iterations |      116 ns/op |  8620689 ops/sec
+        Medium Object Write (50 entries) |    50000 iterations |      712 ns/op |  1404494 ops/sec
+         Medium Object Read (50 entries) |    50000 iterations |      629 ns/op |  1589825 ops/sec
+
+Complex Structures:
+--------------------------------------------------------------------------------
+                  Nested Structure Write |    50000 iterations |       36 ns/op | 27777777 ops/sec
+                   Nested Structure Read |    50000 iterations |       71 ns/op | 14084507 ops/sec
+                       Mixed Types Write |    50000 iterations |       31 ns/op | 32258064 ops/sec
+                        Mixed Types Read |    50000 iterations |       57 ns/op | 17543859 ops/sec
+
+Struct Serialization:
+--------------------------------------------------------------------------------
+                     Simple Struct Write |   100000 iterations |       29 ns/op | 34482758 ops/sec
+                      Simple Struct Read |   100000 iterations |       46 ns/op | 21739130 ops/sec
+                    Complex Struct Write |    50000 iterations |      136 ns/op |  7352941 ops/sec
+                     Complex Struct Read |    50000 iterations |      272 ns/op |  3676470 ops/sec
+```
