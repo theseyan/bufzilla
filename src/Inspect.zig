@@ -12,7 +12,7 @@ pub const InspectOptions = struct {
 const Inspect = @This();
 
 /// Error type for inspect operations.
-pub const Error = Io.Writer.Error || Reader.Error;
+pub const Error = Io.Writer.Error || Reader.Error || error{InvalidUtf8};
 
 writer: *Io.Writer,
 reader: Reader,
@@ -35,7 +35,9 @@ fn writeIndent(self: *Inspect, depth: u32) Io.Writer.Error!void {
     }
 }
 
-fn writeString(self: *Inspect, str: []const u8) Io.Writer.Error!void {
+fn writeString(self: *Inspect, str: []const u8) (Io.Writer.Error || error{InvalidUtf8})!void {
+    if (!std.unicode.utf8ValidateSlice(str)) return error.InvalidUtf8;
+
     const hex = "0123456789abcdef";
     try self.writer.writeByte('"');
     for (str) |c| {

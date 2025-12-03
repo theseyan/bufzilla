@@ -416,3 +416,36 @@ test "inspect: control characters are escaped in JSON" {
     // Verify all control chars are properly escaped
     try std.testing.expectEqualStrings("\"a\\bb\\fc\\u0000d\\u001fe\"", out_fixed.buffered());
 }
+
+test "inspect: invalid UTF-8 returns error" {
+    // invalid UTF-8: 0x80 is a continuation byte without a leading byte
+    const invalid_utf8 = "hello\x80world";
+
+    var enc_buffer: [32]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    try writer.writeAny(invalid_utf8);
+
+    var out_buffer: [64]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+
+    try std.testing.expectError(error.InvalidUtf8, inspector.inspect());
+}
+
+test "inspect: valid UTF-8 with multibyte chars works" {
+    // valid UTF-8: emoji and accented characters
+    const valid_utf8 = "héllo 世界 🎉";
+
+    var enc_buffer: [64]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    try writer.writeAny(valid_utf8);
+
+    var out_buffer: [128]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    try inspector.inspect();
+
+    try std.testing.expectEqualStrings("\"héllo 世界 🎉\"", out_fixed.buffered());
+}

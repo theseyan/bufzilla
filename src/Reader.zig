@@ -29,7 +29,7 @@ pub fn init(bytes: []const u8) Reader {
 
 /// Reads a single data item of given type and advances the position.
 fn readBytes(self: *Reader, comptime T: type) !T {
-    if (self.pos + @sizeOf(T) > self.bytes.len) return error.UnexpectedEof;
+    if (@sizeOf(T) > self.bytes.len - self.pos) return error.UnexpectedEof;
 
     const bytes = self.bytes[self.pos..(self.pos + @sizeOf(T))];
     self.pos += @sizeOf(T);
@@ -67,8 +67,8 @@ pub fn read(self: *Reader) !common.Value {
             return .{ .array = self.depth };
         },
         .varIntUnsigned => {
-            const size = decoded_tag.data + 1;
-            if (self.pos + size > self.bytes.len) return error.UnexpectedEof;
+            const size: usize = @as(usize, decoded_tag.data) + 1;
+            if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const intBytes = self.bytes[self.pos..(self.pos + size)];
             self.pos += size;
@@ -76,8 +76,8 @@ pub fn read(self: *Reader) !common.Value {
             return .{ .u64 = common.decodeVarInt(intBytes) };
         },
         .varIntSigned => {
-            const size = decoded_tag.data + 1;
-            if (self.pos + size > self.bytes.len) return error.UnexpectedEof;
+            const size: usize = @as(usize, decoded_tag.data) + 1;
+            if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const intBytes = self.bytes[self.pos..(self.pos + size)];
             self.pos += size;
@@ -131,8 +131,8 @@ pub fn read(self: *Reader) !common.Value {
             return .{ .bool = (decoded_tag.data != 0) };
         },
         .varIntBytes => {
-            const size_len = decoded_tag.data + 1;
-            if (self.pos + size_len > self.bytes.len) return error.UnexpectedEof;
+            const size_len: usize = @as(usize, decoded_tag.data) + 1;
+            if (size_len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const intBytes = self.bytes[self.pos..(self.pos + size_len)];
             self.pos += size_len;

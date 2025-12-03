@@ -8,6 +8,14 @@
 - `Inspect` now accepts a `*std.Io.Writer` instead of the deprecated `std.io.AnyWriter`.
 - Removed `Writer.deinit()`, `Writer.bytes()`, `Writer.len()`, `Writer.toOwnedSlice()` — buffer management is now the caller's responsibility.
 
+### Bug Fixes
+- Fix integer overflow in `Reader` bounds checks that could bypass validation with malicious length values.
+- Fix `Reader` depth underflow when encountering `containerEnd` at depth 0.
+- Fix `Reader` float decoding to use little-endian byte order always.
+- Fix `Inspect` JSON output to escape all control characters (0x00-0x1F).
+- Fix `encodeVarInt` computing wrong size on big-endian machines.
+- `Inspect` now returns `error.InvalidUtf8` for non-UTF-8 byte sequences instead of producing invalid JSON.
+
 # v0.2.1
 - Compatible with Zig 0.14.1
 - Fix an issue in `build.zig` preventing compilation in macOS hosts.
