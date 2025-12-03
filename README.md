@@ -2,7 +2,7 @@
 
 _buffer • zilla_
 
-A simple and fast **binary encoding format** in pure Zig.
+A compact and fast **binary encoding format** in pure Zig.
 Originally based on rxi's article - ["A Simple Serialization System"](https://rxi.github.io/a_simple_serialization_system.html).
 
 bufzilla is ideal for serializing JSON-like objects and arrays, and has the following qualities:
@@ -11,8 +11,9 @@ bufzilla is ideal for serializing JSON-like objects and arrays, and has the foll
 - **Schemaless**, fully self-describing format; no "pre-compilation" step is necessary.
 - **Zero-copy** reads directly from the encoded bytes.
 - **Variable length integer encoding** enabled by default, no wasted bytes.
+- **Safety** against untrusted inputs with configurable, zero-overhead parsing limits.
 - Data can be read _linearly_ without any intermediate representation (eg. trees).
-- Printing encoded objects as JSON via `Inspect` API.
+- Format encoded objects as JSON via `Inspect` API.
 - Serialize Zig structs and data types recursively.
 
 ## Installation
@@ -225,13 +226,13 @@ The `Inspect` API also accepts limits as a parameter:
 var inspector = Inspect(.{ .max_depth = 100 }).init(data, &writer, .{});
 ```
 
-### Caveats
+### Gotchas
 
-- As a self-describing format, field names (keys) are present in the encoded result which can inflate the encoded size.
+- As a self-describing format, field names (keys) are present in the encoded result which can inflate the encoded size compared to other schemaful encoding formats.
 
 ## Testing
 
-Unit tests are present in the `test/` directory.
+Comprehensive unit tests are present in the `test/` directory.
 
 ```bash
 zig build test
