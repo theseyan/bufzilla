@@ -36,6 +36,7 @@ fn writeIndent(self: *Inspect, depth: u32) Io.Writer.Error!void {
 }
 
 fn writeString(self: *Inspect, str: []const u8) Io.Writer.Error!void {
+    const hex = "0123456789abcdef";
     try self.writer.writeByte('"');
     for (str) |c| {
         switch (c) {
@@ -44,6 +45,11 @@ fn writeString(self: *Inspect, str: []const u8) Io.Writer.Error!void {
             '\n' => try self.writer.writeAll("\\n"),
             '\r' => try self.writer.writeAll("\\r"),
             '\t' => try self.writer.writeAll("\\t"),
+            0x08 => try self.writer.writeAll("\\b"),
+            0x0C => try self.writer.writeAll("\\f"),
+            0x00...0x07, 0x0B, 0x0E...0x1F => {
+                try self.writer.writeAll(&[_]u8{ '\\', 'u', '0', '0', hex[c >> 4], hex[c & 0xF] });
+            },
             else => try self.writer.writeByte(c),
         }
     }

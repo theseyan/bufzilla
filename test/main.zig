@@ -398,3 +398,21 @@ test "reader: malicious bytes length causes UnexpectedEof" {
     var reader = Reader.init(&malformed);
     try std.testing.expectError(error.UnexpectedEof, reader.read());
 }
+
+test "inspect: control characters are escaped in JSON" {
+    // control characters: backspace, form feed, and other control chars
+    const test_string = "a\x08b\x0Cc\x00d\x1Fe";
+
+    var enc_buffer: [32]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    try writer.writeAny(test_string);
+
+    var out_buffer: [64]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect.init(enc_fixed.buffered(), &out_fixed, .{});
+    try inspector.inspect();
+
+    // Verify all control chars are properly escaped
+    try std.testing.expectEqualStrings("\"a\\bb\\fc\\u0000d\\u001fe\"", out_fixed.buffered());
+}
