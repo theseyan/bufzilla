@@ -185,6 +185,34 @@ while (try reader.iterateObject(obj)) |kv| {
 }
 ```
 
+### Path-based queries
+
+The `readPath` method provides fast access to nested values using Javascript-style property paths:
+
+```zig
+const Reader = @import("bufzilla").Reader;
+
+var reader = Reader(.{}).init(encoded_bytes);
+
+// Simple property access
+const name = try reader.readPath("name", .{});
+
+// Nested properties
+const city = try reader.readPath("address.city", .{});
+
+// Array indexing
+const first = try reader.readPath("items[0]", .{});
+
+// Mixed paths
+const score = try reader.readPath("users[5].scores[0]", .{});
+
+// Quoted keys
+const value = try reader.readPath("data['key.with.dots']", .{});
+
+// Returns null if path doesn't exist
+const missing = try reader.readPath("nonexistent.path", .{}); // null
+```
+
 You can find more examples in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
 
 ### Safety & Security

@@ -745,6 +745,179 @@ fn benchComplexStructRead() !void {
 }
 
 // ============================================================================
+// readPath Benchmarks
+// ============================================================================
+
+fn benchReadPathSimpleKey() !void {
+    const BufferLen = 256;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        try writer.startObject();
+        try writer.writeAny("name");
+        try writer.writeAny("Alice");
+        try writer.writeAny("age");
+        try writer.writeAny(@as(i64, 30));
+        try writer.writeAny("active");
+        try writer.writeAny(true);
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.readPath("age", .{});
+}
+
+fn benchReadPathNestedKey() !void {
+    const BufferLen = 512;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        try writer.startObject();
+        try writer.writeAny("user");
+        try writer.startObject();
+        try writer.writeAny("profile");
+        try writer.startObject();
+        try writer.writeAny("name");
+        try writer.writeAny("Alice");
+        try writer.endContainer();
+        try writer.endContainer();
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.readPath("user.profile", .{});
+}
+
+fn benchReadPathDeepNested() !void {
+    const BufferLen = 512;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        try writer.startObject();
+        try writer.writeAny("level1");
+        try writer.startObject();
+        try writer.writeAny("level2");
+        try writer.startObject();
+        try writer.writeAny("level3");
+        try writer.writeAny("deep_value");
+        try writer.endContainer();
+        try writer.endContainer();
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.readPath("level1.level2.level3", .{});
+}
+
+fn benchReadPathArrayIndex() !void {
+    const BufferLen = 512;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        try writer.startArray();
+        for (0..20) |i| {
+            try writer.writeAny(@as(i64, @intCast(i * 10)));
+        }
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.readPath("[15]", .{});
+}
+
+fn benchReadPathMixed() !void {
+    const BufferLen = 1024;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        // { "users": [{"name": "Alice"}, {"name": "Bob"}, {"name": "Charlie"}] }
+        try writer.startObject();
+        try writer.writeAny("users");
+        try writer.startArray();
+        for (0..10) |i| {
+            try writer.startObject();
+            try writer.writeAny("name");
+            var name_buf: [16]u8 = undefined;
+            const name = std.fmt.bufPrint(&name_buf, "User{d}", .{i}) catch unreachable;
+            try writer.writeAny(name);
+            try writer.writeAny("id");
+            try writer.writeAny(@as(i64, @intCast(i)));
+            try writer.endContainer();
+        }
+        try writer.endContainer();
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.readPath("users[7].name", .{});
+}
+
+fn benchReadPathMissing() !void {
+    const BufferLen = 256;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        try writer.startObject();
+        try writer.writeAny("name");
+        try writer.writeAny("Alice");
+        try writer.writeAny("age");
+        try writer.writeAny(@as(i64, 30));
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.readPath("nonexistent", .{});
+}
+
+// ============================================================================
 // Main Benchmark Runner
 // ============================================================================
 
@@ -821,6 +994,17 @@ pub fn main() !void {
     try benchmark("Simple Struct Read", 100000, benchStructRead);
     try benchmark("Complex Struct Write", 50000, benchComplexStructWrite);
     try benchmark("Complex Struct Read", 50000, benchComplexStructRead);
+    std.debug.print("\n", .{});
+
+    // Path Access
+    std.debug.print("Path Access (readPath):\n", .{});
+    std.debug.print("-" ** 80 ++ "\n", .{});
+    try benchmark("Simple Key Access", 500000, benchReadPathSimpleKey);
+    try benchmark("Nested Key Access (2 levels)", 500000, benchReadPathNestedKey);
+    try benchmark("Deep Nested Access (3 levels)", 200000, benchReadPathDeepNested);
+    try benchmark("Array Index Access", 500000, benchReadPathArrayIndex);
+    try benchmark("Mixed Path (obj.arr[i].key)", 200000, benchReadPathMixed);
+    try benchmark("Non-existent Key", 500000, benchReadPathMissing);
     std.debug.print("\n", .{});
 
     std.debug.print("=" ** 80 ++ "\n", .{});
