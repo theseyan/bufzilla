@@ -38,7 +38,7 @@ pub const PathQuery = struct {
 };
 
 /// Error type for read operations.
-pub const Error = error{ UnexpectedEof, InvalidEnumTag, UnexpectedContainerEnd, MaxDepthExceeded, BytesTooLong, ArrayTooLarge, ObjectTooLarge };
+pub const Error = error{ UnexpectedEof, InvalidEnumTag, InvalidSignedMagnitude, UnexpectedContainerEnd, MaxDepthExceeded, BytesTooLong, ArrayTooLarge, ObjectTooLarge };
 
 pub fn Reader(comptime limits: ReadLimits) type {
     // Array/object limits require depth limit for counter stack allocation
@@ -126,14 +126,27 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
                     return .{ .u64 = common.decodeVarInt(intBytes) };
                 },
-                .varIntSigned => {
+                .varIntSignedPositive => {
                     const size: usize = @as(usize, decoded_tag.data) + 1;
                     if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
 
                     const intBytes = self.bytes[self.pos..(self.pos + size)];
                     self.pos += size;
+                    const magnitude = common.decodeVarInt(intBytes);
+                    if (magnitude > @as(u64, @intCast(std.math.maxInt(i64)))) return error.InvalidSignedMagnitude;
+                    return .{ .i64 = @intCast(magnitude) };
+                },
+                .varIntSignedNegative => {
+                    const size: usize = @as(usize, decoded_tag.data) + 1;
+                    if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
 
-                    return .{ .i64 = common.decodeZigZag(common.decodeVarInt(intBytes)) };
+                    const intBytes = self.bytes[self.pos..(self.pos + size)];
+                    self.pos += size;
+                    const magnitude = common.decodeVarInt(intBytes);
+                    if (magnitude == 0) return error.InvalidSignedMagnitude;
+                    if (magnitude == (@as(u64, 1) << 63)) return .{ .i64 = std.math.minInt(i64) };
+                    if (magnitude > @as(u64, @intCast(std.math.maxInt(i64)))) return error.InvalidSignedMagnitude;
+                    return .{ .i64 = -@as(i64, @intCast(magnitude)) };
                 },
                 .f64 => {
                     const f = try self.readBytes(f64);
@@ -276,7 +289,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 .null, .bool => {},
 
                 // Variable length integers
-                .varIntUnsigned, .varIntSigned => {
+                .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
                     const size: usize = @as(usize, decoded.data) + 1;
                     if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
                     self.pos += size;
@@ -311,7 +324,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                             .i16, .u16 => self.pos += 2,
                             .i8, .u8 => self.pos += 1,
                             .null, .bool => {},
-                            .varIntUnsigned, .varIntSigned => {
+                            .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
                                 const size: usize = @as(usize, inner_decoded.data) + 1;
                                 if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
                                 self.pos += size;

@@ -127,7 +127,7 @@ pub fn Inspect(comptime limits: ReadLimits) type {
                 .varIntBytes => try self.writeString(val.varIntBytes),
                 .null => try w.writeAll("null"),
                 .containerEnd => try w.writeAll("END"),
-                .varIntUnsigned, .varIntSigned => {},
+                .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {},
             }
         }
 

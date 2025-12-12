@@ -63,8 +63,18 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try w.writeByte(tag_byte);
             try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
         },
-        .varIntSigned => {
-            const varint = common.encodeVarInt(common.encodeZigZag(data.varIntSigned));
+        .varIntSignedPositive => {
+            const magnitude: u64 = @intCast(data.varIntSignedPositive);
+            const varint = common.encodeVarInt(magnitude);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
+            try w.writeByte(tag_byte);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+        },
+        .varIntSignedNegative => {
+            const signed = data.varIntSignedNegative;
+            std.debug.assert(signed < 0);
+            const magnitude: u64 = if (signed == std.math.minInt(i64)) (@as(u64, 1) << 63) else @intCast(-signed);
+            const varint = common.encodeVarInt(magnitude);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try w.writeByte(tag_byte);
             try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
@@ -122,10 +132,16 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
             u32 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u16 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u8 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            i64 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
-            i32 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
-            i16 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
-            i8 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
+            i64 => {
+                if (data >= 0) {
+                    try self.write(common.Value{ .varIntSignedPositive = data }, .varIntSignedPositive);
+                } else {
+                    try self.write(common.Value{ .varIntSignedNegative = data }, .varIntSignedNegative);
+                }
+            },
+            i32 => try self.writeAnyExplicit(i64, data),
+            i16 => try self.writeAnyExplicit(i64, data),
+            i8 => try self.writeAnyExplicit(i64, data),
             else => @compileError("bufzilla: unsupported integer type: " ++ @typeName(T)),
         },
         .float => switch (T) {

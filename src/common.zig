@@ -30,10 +30,16 @@ pub const Value = union(enum) {
     bool: bool,
     null: void,
 
-    // Variable length integers
-    // In encoded form, they can take anywhere from 1 to 8 bytes
-    // But decoded form is always 64-bit
-    varIntSigned: i64,
+    // Variable length signed integers (signed magnitude)
+    // Encoded as an unsigned magnitude varint. Sign is stored in the tag type.
+    // In encoded form, they can take anywhere from 1 to 8 bytes.
+    // Decoded form is always 64-bit signed.
+    varIntSignedPositive: i64,
+    varIntSignedNegative: i64,
+
+    // Variable length unsigned integers
+    // In encoded form, they can take anywhere from 1 to 8 bytes.
+    // Decoded form is always 64-bit unsigned.
     varIntUnsigned: u64,
 
     // Container tags
