@@ -1,5 +1,4 @@
-/// Large Buffer Benchmark for readPath
-/// Tests readPath performance with random reads from a large encoded buffer
+/// Large Buffer Benchmark
 const std = @import("std");
 const bufzilla = @import("bufzilla");
 const Io = std.Io;

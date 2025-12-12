@@ -19,14 +19,14 @@ pub fn init(writer: *Io.Writer) Writer {
     return .{ .raw = writer };
 }
 
-/// A single update to apply to an already-encoded buffer.
+/// A single update to apply to an already-encoded buffer
 pub const Update = struct {
     path: []const u8,
     ctx: *const anyopaque,
     writeFn: *const fn (writer: *Writer, ctx: *const anyopaque) Error!void,
     applied: bool = false,
 
-    /// Creates an update that will write `new_value_ptr.*` at `path`.
+    /// Creates an update
     pub fn init(path: []const u8, new_value_ptr: anytype) Update {
         const PtrT = @TypeOf(new_value_ptr);
         const ptr_info = @typeInfo(PtrT);
@@ -47,12 +47,12 @@ pub const Update = struct {
     }
 };
 
-/// Applies a set of updates to an already-encoded object buffer, streaming the new encoding to the current writer.
+/// Applies a set of updates to an already-encoded object buffer, streaming the new encoding to the current writer
 pub fn applyUpdates(self: *Writer, encoded_buf: []const u8, updates: []Update) (Error || reader_mod.Error || updates_mod.Error)!void {
     try updates_mod.applyUpdates(Writer, self, encoded_buf, updates);
 }
 
-/// Writes a single data item to the underlying writer.
+/// Writes a single data item to the underlying writer
 pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(common.Value)) Error!void {
     const w = self.raw;
 
