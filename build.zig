@@ -42,4 +42,22 @@ pub fn build(b: *std.Build) void {
 
     const run_benchmark = b.addRunArtifact(benchmark);
     b.step("bench", "Run benchmarks").dependOn(&run_benchmark.step);
+
+    // Large buffer benchmark
+    const large_buffer_bench = b.addExecutable(.{
+        .name = "bufzilla-bench-large",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/large_buffer.zig"),
+            .imports = &.{.{ .name = "bufzilla", .module = bufzilla }},
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_lld = !no_llvm and target.result.os.tag != .macos,
+        .use_llvm = !no_llvm,
+    });
+
+    b.installArtifact(large_buffer_bench);
+
+    const run_large_bench = b.addRunArtifact(large_buffer_bench);
+    b.step("bench-large", "Run large buffer benchmarks").dependOn(&run_large_bench.step);
 }

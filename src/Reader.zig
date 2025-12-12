@@ -16,13 +16,29 @@ pub const ReadLimits = struct {
     /// Maximum byte array length for strings/binary blobs. Set to null for unlimited.
     max_bytes_length: ?usize = null,
 
-    /// Maximum array element count. Set to null for unlimited.
-    /// Requires max_depth to be set.
+    /// Maximum array element count. Set to null for unlimited. Requires max_depth to be set.
     max_array_length: ?usize = null,
 
-    /// Maximum object key-value pair count. Set to null for unlimited.
-    /// Requires max_depth to be set.
+    /// Maximum object key-value pair count. Set to null for unlimited. Requires max_depth to be set.
     max_object_size: ?usize = null,
+};
+
+const PeekResult = struct {
+    tag: std.meta.Tag(common.Value),
+    data: u3,
+};
+
+pub const ReadPathOptions = struct {
+    /// If true, preserves the reader's position after the call.
+    /// Otherwise, the reader's position will be at the end of the found value.
+    preserve_state: bool = true,
+};
+
+const PathSegment = struct {
+    is_index: bool,
+    index: usize,
+    key: []const u8,
+    rest: []const u8,
 };
 
 /// Error type for read operations.
@@ -93,7 +109,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     self.depth -= 1;
                     return .{ .containerEnd = self.depth };
                 },
-                .object => {
+                .object, .array => {
+                    // Check depth limit
                     if (limits.max_depth) |max| {
                         if (self.depth >= max) return error.MaxDepthExceeded;
                     }
@@ -102,18 +119,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     if (needs_counters) {
                         self.iteration_counts[self.depth - 1] = 0;
                     }
-                    return .{ .object = self.depth };
-                },
-                .array => {
-                    if (limits.max_depth) |max| {
-                        if (self.depth >= max) return error.MaxDepthExceeded;
-                    }
-                    self.depth += 1;
-                    // Reset iteration counter for this new container
-                    if (needs_counters) {
-                        self.iteration_counts[self.depth - 1] = 0;
-                    }
-                    return .{ .array = self.depth };
+                    return if (val_type == .object) .{ .object = self.depth } else .{ .array = self.depth };
                 },
                 .varIntUnsigned => {
                     const size: usize = @as(usize, decoded_tag.data) + 1;
@@ -222,6 +228,140 @@ pub fn Reader(comptime limits: ReadLimits) type {
             }
         }
 
+        /// Peeks at the next tag without advancing position.
+        fn peekTag(self: *Self) !PeekResult {
+            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+            const tag_byte = self.bytes[self.pos];
+            const decoded = common.decodeTag(tag_byte);
+            const tag = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            return .{ .tag = tag, .data = decoded.data };
+        }
+
+        /// Reads the length from a varIntBytes or bytes tag.
+        inline fn readBytesLength(self: *Self, val_type: std.meta.Tag(common.Value), tag_data: u3) !usize {
+            if (val_type == .varIntBytes) {
+                const size_len: usize = @as(usize, tag_data) + 1;
+                if (size_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                const len = common.decodeVarInt(self.bytes[self.pos..][0..size_len]);
+                self.pos += size_len;
+
+                if (limits.max_bytes_length) |max| {
+                    if (len > max) return error.BytesTooLong;
+                }
+                return len;
+            } else { // .bytes
+                if (8 > self.bytes.len - self.pos) return error.UnexpectedEof;
+                const len = std.mem.readInt(u64, self.bytes[self.pos..][0..8], .little);
+                self.pos += 8;
+
+                if (limits.max_bytes_length) |max| {
+                    if (len > max) return error.BytesTooLong;
+                }
+                return len;
+            }
+        }
+
+        /// Skips a single value without materializing it.
+        pub fn skipValue(self: *Self) !void {
+            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+
+            const tag_byte = self.bytes[self.pos];
+            self.pos += 1;
+
+            const decoded = common.decodeTag(tag_byte);
+            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+
+            switch (val_type) {
+                // Fixed size types
+                .f64, .i64, .u64 => self.pos += 8,
+                .f32, .i32, .u32 => self.pos += 4,
+                .i16, .u16 => self.pos += 2,
+                .i8, .u8 => self.pos += 1,
+                .null, .bool => {},
+
+                // Variable length integers
+                .varIntUnsigned, .varIntSigned => {
+                    const size: usize = @as(usize, decoded.data) + 1;
+                    if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
+                    self.pos += size;
+                },
+
+                // Byte arrays
+                .varIntBytes, .bytes => {
+                    const len = try self.readBytesLength(val_type, decoded.data);
+                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                    self.pos += len;
+                },
+
+                // Containers
+                .array, .object => {
+                    if (limits.max_depth) |max| {
+                        if (self.depth >= max) return error.MaxDepthExceeded;
+                    }
+
+                    var nest_depth: u32 = 1;
+                    while (nest_depth > 0) {
+                        if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+
+                        const inner_tag = self.bytes[self.pos];
+                        self.pos += 1;
+
+                        const inner_decoded = common.decodeTag(inner_tag);
+                        const inner_type = try std.meta.intToEnum(std.meta.Tag(common.Value), inner_decoded.tag);
+
+                        switch (inner_type) {
+                            .f64, .i64, .u64 => self.pos += 8,
+                            .f32, .i32, .u32 => self.pos += 4,
+                            .i16, .u16 => self.pos += 2,
+                            .i8, .u8 => self.pos += 1,
+                            .null, .bool => {},
+                            .varIntUnsigned, .varIntSigned => {
+                                const size: usize = @as(usize, inner_decoded.data) + 1;
+                                if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
+                                self.pos += size;
+                            },
+                            .varIntBytes, .bytes => {
+                                const len = try self.readBytesLength(inner_type, inner_decoded.data);
+                                if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                                self.pos += len;
+                            },
+                            .array, .object => {
+                                if (limits.max_depth) |max| {
+                                    if (self.depth + nest_depth >= max) return error.MaxDepthExceeded;
+                                }
+                                nest_depth += 1;
+                            },
+                            .containerEnd => nest_depth -= 1,
+                        }
+                    }
+                },
+
+                .containerEnd => return error.UnexpectedContainerEnd,
+            }
+        }
+
+        /// Reads the bytes content of a varIntBytes or bytes tag and returns a slice.
+        fn readBytesSlice(self: *Self) ![]const u8 {
+            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+
+            const tag_byte = self.bytes[self.pos];
+            self.pos += 1;
+
+            const decoded = common.decodeTag(tag_byte);
+            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+
+            if (val_type != .varIntBytes and val_type != .bytes) {
+                return error.InvalidEnumTag;
+            }
+
+            const len = try self.readBytesLength(val_type, decoded.data);
+            if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+
+            const result = self.bytes[self.pos..][0..len];
+            self.pos += len;
+            return result;
+        }
+
         /// Iterates over the key-value pairs of a given Value Object.
         pub fn iterateObject(self: *Self, obj: common.Value) !?KeyValuePair {
             std.debug.assert(obj == .object);
@@ -258,6 +398,316 @@ pub fn Reader(comptime limits: ReadLimits) type {
             }
 
             return value;
+        }
+
+        /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
+        /// Returns null if the path doesn't exist or points to an incompatible type.
+        pub fn readPath(self: *Self, path: []const u8, options: ReadPathOptions) !?common.Value {
+            if (options.preserve_state) {
+                // Preserve current state
+                const saved_pos = self.pos;
+                const saved_depth = self.depth;
+                const saved_counts = self.iteration_counts;
+
+                // Reset to start of buffer
+                self.pos = 0;
+                self.depth = 0;
+                self.iteration_counts = [_]usize{0} ** counter_stack_size;
+
+                const result = self.navigatePath(path);
+
+                // Restore original state
+                self.pos = saved_pos;
+                self.depth = saved_depth;
+                self.iteration_counts = saved_counts;
+
+                return result;
+            } else {
+                // Reset to start of buffer for path navigation
+                self.pos = 0;
+                self.depth = 0;
+                self.iteration_counts = [_]usize{0} ** counter_stack_size;
+
+                return self.navigatePath(path);
+            }
+        }
+
+        /// Parses and navigates the path string using skipping.
+        fn navigatePath(self: *Self, path: []const u8) !?common.Value {
+            // Peek at root type
+            const root_peek = try self.peekTag();
+
+            if (path.len == 0) {
+                return try self.read();
+            }
+
+            var remaining = path;
+
+            if (root_peek.tag != .object and root_peek.tag != .array) {
+                // Root is not a container but path requires navigation
+                return null;
+            }
+
+            const first_segment = parsePathSegment(remaining) orelse return null;
+
+            if (first_segment.is_index) {
+                // Index access requires array
+                if (root_peek.tag != .array) return null;
+            } else {
+                // Key access requires object
+                if (root_peek.tag != .object) return null;
+            }
+
+            // Check depth limit before entering root container
+            if (limits.max_depth) |max| {
+                if (self.depth >= max) return error.MaxDepthExceeded;
+            }
+
+            // Enter the root container
+            self.pos += 1;
+            self.depth += 1;
+
+            // Track current container type
+            var current_is_array = (root_peek.tag == .array);
+
+            while (remaining.len > 0) {
+                const segment = parsePathSegment(remaining) orelse return null;
+
+                if (segment.is_index and !current_is_array) {
+                    // Index access on object, type mismatch
+                    return null;
+                }
+                if (!segment.is_index and current_is_array) {
+                    // Key access on array, type mismatch
+                    return null;
+                }
+
+                if (segment.is_index) {
+                    // Array index access
+                    const target_idx = segment.index;
+                    var idx: usize = 0;
+
+                    while (true) {
+                        const peek = try self.peekTag();
+
+                        if (peek.tag == .containerEnd) {
+                            // End of array, index not found
+                            self.pos += 1;
+                            self.depth -= 1;
+                            return null;
+                        }
+
+                        if (limits.max_array_length) |max| {
+                            if (idx >= max) return error.ArrayTooLarge;
+                        }
+
+                        if (idx == target_idx) {
+                            if (segment.rest.len == 0) {
+                                return try self.read();
+                            } else {
+                                if (peek.tag != .object and peek.tag != .array) {
+                                    // Need to navigate further but value is not a container
+                                    return null;
+                                }
+
+                                if (limits.max_depth) |max| {
+                                    if (self.depth >= max) return error.MaxDepthExceeded;
+                                }
+
+                                current_is_array = (peek.tag == .array);
+                                self.pos += 1;
+                                self.depth += 1;
+                                break;
+                            }
+                        }
+
+                        // Skip this value
+                        try self.skipValue();
+                        idx += 1;
+                    }
+                } else {
+                    // Object key access
+                    var found = false;
+                    var kv_count: usize = 0;
+
+                    while (true) {
+                        const peek = try self.peekTag();
+
+                        if (peek.tag == .containerEnd) {
+                            // End of object, key not found
+                            self.pos += 1;
+                            self.depth -= 1;
+                            return null;
+                        }
+
+                        if (limits.max_object_size) |max| {
+                            if (kv_count >= max) return error.ObjectTooLarge;
+                        }
+
+                        // Key must be bytes
+                        if (peek.tag != .varIntBytes and peek.tag != .bytes) {
+                            return null;
+                        }
+
+                        const key_slice = try self.readBytesSlice();
+
+                        if (std.mem.eql(u8, key_slice, segment.key)) {
+                            if (segment.rest.len == 0) {
+                                return try self.read();
+                            } else {
+                                const value_peek = try self.peekTag();
+                                if (value_peek.tag != .object and value_peek.tag != .array) {
+                                    // Need to navigate further but value is not a container
+                                    return null;
+                                }
+
+                                if (limits.max_depth) |max| {
+                                    if (self.depth >= max) return error.MaxDepthExceeded;
+                                }
+
+                                current_is_array = (value_peek.tag == .array);
+                                self.pos += 1;
+                                self.depth += 1;
+                                found = true;
+                                break;
+                            }
+                        } else {
+                            try self.skipValue();
+                        }
+
+                        kv_count += 1;
+                    }
+
+                    if (!found and segment.rest.len > 0) {
+                        return null;
+                    }
+                }
+
+                remaining = segment.rest;
+            }
+
+            return null;
+        }
+
+        /// Parses a single path segment from the path string.
+        /// Returns the segment info and remaining path, or null for malformed paths.
+        fn parsePathSegment(path: []const u8) ?PathSegment {
+            var i: usize = 0;
+
+            // Check for array index or quoted key at start: [N] or ['key'] or ["key"]
+            if (path.len > 0 and path[0] == '[') {
+                i = 1;
+
+                // Check if it's a quoted key
+                if (i < path.len and (path[i] == '\'' or path[i] == '"')) {
+                    const quote_char = path[i];
+                    i += 1;
+                    const key_start = i;
+
+                    // Find closing quote
+                    while (i < path.len and path[i] != quote_char) : (i += 1) {}
+
+                    // Malformed: no closing quote found
+                    if (i >= path.len) return null;
+
+                    const key = path[key_start..i];
+
+                    // Skip past quote
+                    i += 1;
+
+                    // Skip past ']' if present
+                    if (i < path.len and path[i] == ']') {
+                        i += 1;
+                    }
+
+                    // Skip '.' if present
+                    if (i < path.len and path[i] == '.') {
+                        i += 1;
+                    }
+
+                    return .{
+                        .is_index = false,
+                        .index = 0,
+                        .key = key,
+                        .rest = path[i..],
+                    };
+                }
+
+                // Numeric index
+                while (i < path.len and path[i] != ']') : (i += 1) {}
+
+                // Malformed: no closing bracket
+                if (i >= path.len) return null;
+
+                const idx_str = path[1..i];
+                const index = std.fmt.parseInt(usize, idx_str, 10) catch return null;
+
+                // Skip past ']'
+                i += 1;
+
+                // Skip '.' if present
+                if (i < path.len and path[i] == '.') {
+                    i += 1;
+                }
+
+                return .{
+                    .is_index = true,
+                    .index = index,
+                    .key = "",
+                    .rest = path[i..],
+                };
+            }
+
+            // Check for quoted key without brackets: 'key' or "key"
+            if (path.len > 0 and (path[0] == '\'' or path[0] == '"')) {
+                const quote_char = path[0];
+                i = 1;
+                const key_start = i;
+
+                // Find closing quote
+                while (i < path.len and path[i] != quote_char) : (i += 1) {}
+
+                // Malformed: no closing quote found
+                if (i >= path.len) return null;
+
+                const key = path[key_start..i];
+
+                // Skip past quote
+                i += 1;
+
+                // Skip '.' if present
+                if (i < path.len and path[i] == '.') {
+                    i += 1;
+                }
+
+                return .{
+                    .is_index = false,
+                    .index = 0,
+                    .key = key,
+                    .rest = path[i..],
+                };
+            }
+
+            // Object key: read until '.', '[', or end
+            while (i < path.len and path[i] != '.' and path[i] != '[') : (i += 1) {}
+
+            const key = path[0..i];
+
+            // Determine rest
+            var rest_start = i;
+            if (i < path.len) {
+                if (path[i] == '.') {
+                    rest_start = i + 1;
+                }
+                // '[' is kept for next segment
+            }
+
+            return .{
+                .is_index = false,
+                .index = 0,
+                .key = key,
+                .rest = path[rest_start..],
+            };
         }
     };
 }

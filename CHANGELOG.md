@@ -1,3 +1,11 @@
+# v0.3.1
+
+- Added `Reader.readPath()` for fast path-based queries on encoded data using Javascript-style property access: `"name"`, `"address.city"`, `"items[0]"`, `"users[5].scores[0]"`.
+- Added `Writer.applyUpdates` for efficiently applying a changeset of updates to an existing encoded buffer in a single pass.
+
+### Improvements
+- Refactored and simplified logic in `Reader.zig`
+
 # v0.3.0
 
 - Upgrade to Zig 0.15.2
