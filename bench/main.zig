@@ -772,7 +772,7 @@ fn benchReadPathSimpleKey() !void {
     }
 
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
-    _ = try reader.readPath("age", .{});
+    _ = try reader.readPath("age");
 }
 
 fn benchReadPathNestedKey() !void {
@@ -801,7 +801,7 @@ fn benchReadPathNestedKey() !void {
     }
 
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
-    _ = try reader.readPath("user.profile", .{});
+    _ = try reader.readPath("user.profile");
 }
 
 fn benchReadPathDeepNested() !void {
@@ -830,7 +830,7 @@ fn benchReadPathDeepNested() !void {
     }
 
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
-    _ = try reader.readPath("level1.level2.level3", .{});
+    _ = try reader.readPath("level1.level2.level3");
 }
 
 fn benchReadPathArrayIndex() !void {
@@ -854,7 +854,7 @@ fn benchReadPathArrayIndex() !void {
     }
 
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
-    _ = try reader.readPath("[15]", .{});
+    _ = try reader.readPath("[15]");
 }
 
 fn benchReadPathMixed() !void {
@@ -889,7 +889,7 @@ fn benchReadPathMixed() !void {
     }
 
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
-    _ = try reader.readPath("users[7].name", .{});
+    _ = try reader.readPath("users[7].name");
 }
 
 fn benchReadPathMissing() !void {
@@ -914,7 +914,89 @@ fn benchReadPathMissing() !void {
     }
 
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
-    _ = try reader.readPath("nonexistent", .{});
+    _ = try reader.readPath("nonexistent");
+}
+
+// ============================================================================
+// readPaths Benchmarks
+// ============================================================================
+
+fn benchReadPathsSimple3() !void {
+    const BufferLen = 256;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+        var queries: [3]bufzilla.PathQuery = undefined;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        try writer.startObject();
+        try writer.writeAny("name");
+        try writer.writeAny("Alice");
+        try writer.writeAny("age");
+        try writer.writeAny(@as(i64, 30));
+        try writer.writeAny("active");
+        try writer.writeAny(true);
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+
+        State.queries = .{
+            .{ .path = "name" },
+            .{ .path = "age" },
+            .{ .path = "active" },
+        };
+
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    try reader.readPaths(State.queries[0..]);
+}
+
+fn benchReadPathsMixed3() !void {
+    const BufferLen = 1024;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+        var queries: [3]bufzilla.PathQuery = undefined;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        // { "users": [{"name": "UserN", "id": N}, ...] }
+        try writer.startObject();
+        try writer.writeAny("users");
+        try writer.startArray();
+        for (0..10) |i| {
+            try writer.startObject();
+            try writer.writeAny("name");
+            var name_buf: [16]u8 = undefined;
+            const name = std.fmt.bufPrint(&name_buf, "User{d}", .{i}) catch unreachable;
+            try writer.writeAny(name);
+            try writer.writeAny("id");
+            try writer.writeAny(@as(i64, @intCast(i)));
+            try writer.endContainer();
+        }
+        try writer.endContainer();
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+
+        State.queries = .{
+            .{ .path = "users[7].name" },
+            .{ .path = "users[7].id" },
+            .{ .path = "users[0].id" },
+        };
+
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    try reader.readPaths(State.queries[0..]);
 }
 
 // ============================================================================
@@ -1049,6 +1131,13 @@ pub fn main() !void {
     try benchmark("Array Index Access", 500000, benchReadPathArrayIndex);
     try benchmark("Mixed Path (obj.arr[i].key)", 200000, benchReadPathMixed);
     try benchmark("Non-existent Key", 500000, benchReadPathMissing);
+    std.debug.print("\n", .{});
+
+    // Multi-path Access
+    std.debug.print("Path Access (readPaths):\n", .{});
+    std.debug.print("-" ** 80 ++ "\n", .{});
+    try benchmark("ReadPaths Simple (3 paths)", 300000, benchReadPathsSimple3);
+    try benchmark("ReadPaths Mixed (3 paths)", 200000, benchReadPathsMixed3);
     std.debug.print("\n", .{});
 
     // Updates

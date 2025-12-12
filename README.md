@@ -226,22 +226,38 @@ const Reader = @import("bufzilla").Reader;
 var reader = Reader(.{}).init(encoded_bytes);
 
 // Simple property access
-const name = try reader.readPath("name", .{});
+const name = try reader.readPath("name");
 
 // Nested properties
-const city = try reader.readPath("address.city", .{});
+const city = try reader.readPath("address.city");
 
 // Array indexing
-const first = try reader.readPath("items[0]", .{});
+const first = try reader.readPath("items[0]");
 
 // Mixed paths
-const score = try reader.readPath("users[5].scores[0]", .{});
+const score = try reader.readPath("users[5].scores[0]");
 
 // Quoted keys
-const value = try reader.readPath("data['key.with.dots']", .{});
+const value = try reader.readPath("data['key.with.dots']");
 
 // Returns null if path doesn't exist
-const missing = try reader.readPath("nonexistent.path", .{}); // null
+const missing = try reader.readPath("nonexistent.path"); // null
+```
+
+For reading many paths efficiently, use `readPaths` to scan the buffer once:
+
+```zig
+var queries = [_]bufzilla.PathQuery{
+    .{ .path = "name" },
+    .{ .path = "address.city" },
+    .{ .path = "items[0]" },
+};
+
+try reader.readPaths(queries[0..]);
+
+const name = queries[0].value;
+const city = queries[1].value;
+const first_item = queries[2].value;
 ```
 
 You can find more examples in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).

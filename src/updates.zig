@@ -1,6 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
 const reader_mod = @import("Reader.zig");
+const path = @import("path.zig");
 
 pub const Error = error{
     /// Root value is not an object
@@ -17,125 +18,10 @@ pub const Error = error{
 
 const ReadError = reader_mod.Error;
 
-const PathSegment = struct {
-    is_index: bool,
-    index: usize,
-    key: []const u8,
-    rest: []const u8,
-};
-
-fn parsePathSegment(path: []const u8) ?PathSegment {
-    var i: usize = 0;
-
-    if (path.len > 0 and path[0] == '[') {
-        i = 1;
-
-        if (i < path.len and (path[i] == '\'' or path[i] == '"')) {
-            const quote_char = path[i];
-            i += 1;
-            const key_start = i;
-            while (i < path.len and path[i] != quote_char) : (i += 1) {}
-            if (i >= path.len) return null;
-            const key = path[key_start..i];
-            i += 1;
-            if (i < path.len and path[i] == ']') i += 1;
-            if (i < path.len and path[i] == '.') i += 1;
-            return .{ .is_index = false, .index = 0, .key = key, .rest = path[i..] };
-        }
-
-        while (i < path.len and path[i] != ']') : (i += 1) {}
-        if (i >= path.len) return null;
-        const idx_str = path[1..i];
-        const index = std.fmt.parseInt(usize, idx_str, 10) catch return null;
-        i += 1;
-        if (i < path.len and path[i] == '.') i += 1;
-        return .{ .is_index = true, .index = index, .key = "", .rest = path[i..] };
-    }
-
-    if (path.len > 0 and (path[0] == '\'' or path[0] == '"')) {
-        const quote_char = path[0];
-        i = 1;
-        const key_start = i;
-        while (i < path.len and path[i] != quote_char) : (i += 1) {}
-        if (i >= path.len) return null;
-        const key = path[key_start..i];
-        i += 1;
-        if (i < path.len and path[i] == '.') i += 1;
-        return .{ .is_index = false, .index = 0, .key = key, .rest = path[i..] };
-    }
-
-    while (i < path.len and path[i] != '.' and path[i] != '[') : (i += 1) {}
-    const key = path[0..i];
-
-    var rest_start = i;
-    if (i < path.len and path[i] == '.') {
-        rest_start = i + 1;
-    }
-
-    return .{ .is_index = false, .index = 0, .key = key, .rest = path[rest_start..] };
-}
-
-fn segmentAtDepth(path: []const u8, depth: usize) ?PathSegment {
-    var remaining = path;
-    var d: usize = 0;
-    while (true) : (d += 1) {
-        const seg = parsePathSegment(remaining) orelse return null;
-        if (d == depth) return seg;
-        remaining = seg.rest;
-        if (remaining.len == 0) return null;
-    }
-}
-
 fn peekTagType(reader: anytype, buf: []const u8) ReadError!std.meta.Tag(common.Value) {
     if (reader.pos >= buf.len) return ReadError.UnexpectedEof;
     const decoded = common.decodeTag(buf[reader.pos]);
     return std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
-}
-
-fn validatePath(path: []const u8) bool {
-    if (path.len == 0) return true;
-    var remaining = path;
-    while (true) {
-        const seg = parsePathSegment(remaining) orelse return false;
-        remaining = seg.rest;
-        if (remaining.len == 0) return true;
-    }
-}
-
-fn lessThanBySegments(_: void, a: anytype, b: anytype) bool {
-    var ra = a.path;
-    var rb = b.path;
-
-    while (true) {
-        const sa_opt = parsePathSegment(ra);
-        const sb_opt = parsePathSegment(rb);
-        if (sa_opt == null or sb_opt == null) {
-            // Invalid paths are sorted by raw bytes; applyUpdates will error anyway.
-            return std.mem.order(u8, a.path, b.path) == .lt;
-        }
-
-        const sa = sa_opt.?;
-        const sb = sb_opt.?;
-
-        if (sa.is_index != sb.is_index) {
-            // Key segments sort before index segments.
-            return !sa.is_index;
-        }
-
-        if (!sa.is_index) {
-            const ord = std.mem.order(u8, sa.key, sb.key);
-            if (ord != .eq) return ord == .lt;
-        } else {
-            if (sa.index != sb.index) return sa.index < sb.index;
-        }
-
-        if (sa.rest.len == 0 or sb.rest.len == 0) {
-            return sa.rest.len == 0 and sb.rest.len != 0;
-        }
-
-        ra = sa.rest;
-        rb = sb.rest;
-    }
 }
 
 pub fn applyUpdates(comptime WriterT: type, writer: *WriterT, encoded_buf: []const u8, updates: anytype) (Error || ReadError || WriterT.Error)!void {
@@ -155,12 +41,12 @@ pub fn applyUpdates(comptime WriterT: type, writer: *WriterT, encoded_buf: []con
     }
 
     for (updates) |u| {
-        if (!validatePath(u.path)) return Error.MalformedPath;
+        if (!path.validate(u.path)) return Error.MalformedPath;
     }
 
     const Less = struct {
         fn lt(_: void, lhs: UpdateT, rhs: UpdateT) bool {
-            return lessThanBySegments({}, lhs, rhs);
+            return path.lessThanPathSegments(lhs.path, rhs.path);
         }
     };
     std.sort.pdq(UpdateT, updates, {}, Less.lt);
@@ -218,7 +104,7 @@ fn applyObject(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: [
 
         for (updates, 0..) |*upd, i| {
             if (upd.applied) continue;
-            const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+            const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
             if (seg.is_index) return Error.PathTypeMismatch;
             if (std.mem.eql(u8, seg.key, key)) {
                 if (match_start == null) match_start = i;
@@ -246,7 +132,7 @@ fn applyObject(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: [
             // Apply last leaf update, mark all leaf updates applied
             for (updates[match_start.?..match_end]) |*upd| {
                 if (upd.applied) continue;
-                const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+                const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
                 if (!seg.is_index and std.mem.eql(u8, seg.key, key) and seg.rest.len == 0) {
                     upd.applied = true;
                 }
@@ -293,7 +179,7 @@ fn applyArray(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: []
 
         for (updates, 0..) |*upd, i| {
             if (upd.applied) continue;
-            const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+            const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
             if (!seg.is_index) return Error.PathTypeMismatch;
             if (seg.index == idx) {
                 if (match_start == null) match_start = i;
@@ -316,7 +202,7 @@ fn applyArray(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: []
             if (leaf_last != null) {
                 for (updates[match_start.?..match_end]) |*upd| {
                     if (upd.applied) continue;
-                    const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+                    const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
                     if (seg.is_index and seg.index == idx and seg.rest.len == 0) {
                         upd.applied = true;
                     }
@@ -353,14 +239,14 @@ fn emitObjectFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyt
             continue;
         }
 
-        const seg_i = segmentAtDepth(updates[i].path, depth) orelse return Error.MalformedPath;
+        const seg_i = path.segmentAtDepth(updates[i].path, depth) orelse return Error.MalformedPath;
         if (seg_i.is_index) return Error.PathTypeMismatch;
         const key = seg_i.key;
 
         var group_end: usize = i + 1;
         while (group_end < updates.len) : (group_end += 1) {
             if (updates[group_end].applied) continue;
-            const seg_g = segmentAtDepth(updates[group_end].path, depth) orelse return Error.MalformedPath;
+            const seg_g = path.segmentAtDepth(updates[group_end].path, depth) orelse return Error.MalformedPath;
             if (seg_g.is_index) return Error.PathTypeMismatch;
             if (!std.mem.eql(u8, seg_g.key, key)) break;
         }
@@ -371,7 +257,7 @@ fn emitObjectFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyt
         var child_first: ?usize = null;
         for (group, 0..) |*upd, gi| {
             if (upd.applied) continue;
-            const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+            const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
             if (seg.rest.len == 0) {
                 leaf_last = gi;
             } else if (child_first == null) {
@@ -386,7 +272,7 @@ fn emitObjectFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyt
         if (leaf_last != null) {
             for (group) |*upd| {
                 if (upd.applied) continue;
-                const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+                const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
                 if (seg.rest.len == 0) upd.applied = true;
             }
             const upd = &group[leaf_last.?];
@@ -401,7 +287,7 @@ fn emitObjectFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyt
 
 fn emitContainerFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anytype, depth: usize) (Error || ReadError || WriterT.Error)!void {
     if (updates.len == 0) return;
-    const first_seg = segmentAtDepth(updates[0].path, depth) orelse return Error.MalformedPath;
+    const first_seg = path.segmentAtDepth(updates[0].path, depth) orelse return Error.MalformedPath;
 
     if (first_seg.is_index) {
         try writer.startArray();
@@ -420,7 +306,7 @@ fn emitArrayFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyty
 
     for (updates) |*upd| {
         if (upd.applied) continue;
-        const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+        const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
         if (!seg.is_index) return Error.PathTypeMismatch;
         any_unapplied = true;
         if (seg.index > max_index) max_index = seg.index;
@@ -437,7 +323,7 @@ fn emitArrayFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyty
 
         for (updates, 0..) |*upd, i| {
             if (upd.applied) continue;
-            const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+            const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
             if (!seg.is_index) return Error.PathTypeMismatch;
             if (seg.index == idx) {
                 if (match_start == null) match_start = i;
@@ -461,7 +347,7 @@ fn emitArrayFromUpdates(comptime WriterT: type, writer: *WriterT, updates: anyty
         if (leaf_last != null) {
             for (group) |*upd| {
                 if (upd.applied) continue;
-                const seg = segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
+                const seg = path.segmentAtDepth(upd.path, depth) orelse return Error.MalformedPath;
                 if (seg.is_index and seg.index == idx and seg.rest.len == 0) upd.applied = true;
             }
             const upd = &updates[leaf_last.?];
