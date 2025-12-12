@@ -1,6 +1,7 @@
 /// Reader API
 const std = @import("std");
 const common = @import("common.zig");
+const path = @import("path.zig");
 
 /// A Key-value pair inside an Object.
 pub const KeyValuePair = struct {
@@ -28,17 +29,12 @@ const PeekResult = struct {
     data: u3,
 };
 
-pub const ReadPathOptions = struct {
-    /// If true, preserves the reader's position after the call.
-    /// Otherwise, the reader's position will be at the end of the found value.
-    preserve_state: bool = true,
-};
-
-const PathSegment = struct {
-    is_index: bool,
-    index: usize,
-    key: []const u8,
-    rest: []const u8,
+/// A single path query for readPaths.
+pub const PathQuery = struct {
+    path: []const u8,
+    value: ?common.Value = null,
+    resolved: bool = false,
+    orig_index: usize = 0,
 };
 
 /// Error type for read operations.
@@ -400,314 +396,361 @@ pub fn Reader(comptime limits: ReadLimits) type {
             return value;
         }
 
-        /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
-        /// Returns null if the path doesn't exist or points to an incompatible type.
-        pub fn readPath(self: *Self, path: []const u8, options: ReadPathOptions) !?common.Value {
-            if (options.preserve_state) {
-                // Preserve current state
-                const saved_pos = self.pos;
-                const saved_depth = self.depth;
-                const saved_counts = self.iteration_counts;
-
-                // Reset to start of buffer
-                self.pos = 0;
-                self.depth = 0;
-                self.iteration_counts = [_]usize{0} ** counter_stack_size;
-
-                const result = self.navigatePath(path);
-
-                // Restore original state
-                self.pos = saved_pos;
-                self.depth = saved_depth;
-                self.iteration_counts = saved_counts;
-
-                return result;
-            } else {
-                // Reset to start of buffer for path navigation
-                self.pos = 0;
-                self.depth = 0;
-                self.iteration_counts = [_]usize{0} ** counter_stack_size;
-
-                return self.navigatePath(path);
-            }
+        fn lessThanByIndex(_: void, lhs: PathQuery, rhs: PathQuery) bool {
+            return lhs.orig_index < rhs.orig_index;
         }
 
-        /// Parses and navigates the path string using skipping.
-        fn navigatePath(self: *Self, path: []const u8) !?common.Value {
-            // Peek at root type
+        /// Reads multiple paths from the buffer in a single pass.
+        /// Each query's `value` is populated with the found Value or null.
+        /// Malformed paths yield null for that query.
+        pub fn readPaths(self: *Self, queries: []PathQuery) Error!void {
+            const saved_pos = self.pos;
+            const saved_depth = self.depth;
+            const saved_counts = self.iteration_counts;
+
+            self.pos = 0;
+            self.depth = 0;
+            self.iteration_counts = [_]usize{0} ** counter_stack_size;
+
+            try self.readPathsInternal(queries);
+
+            self.pos = saved_pos;
+            self.depth = saved_depth;
+            self.iteration_counts = saved_counts;
+        }
+
+        fn readPathsInternal(self: *Self, queries: []PathQuery) Error!void {
+            if (queries.len == 0) return;
+
+            var remaining: usize = queries.len;
+            for (queries, 0..) |*q, i| {
+                q.value = null;
+                q.resolved = false;
+                q.orig_index = i;
+                if (!path.validate(q.path)) {
+                    q.resolved = true;
+                    remaining -= 1;
+                }
+            }
+
+            const LessSeg = struct {
+                fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                    return path.lessThanPathSegments(a.path, b.path);
+                }
+            };
+            std.sort.pdq(PathQuery, queries, {}, LessSeg.lt);
+
+            if (remaining == 0) {
+                const LessIdx = struct {
+                    fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                        return lessThanByIndex({}, a, b);
+                    }
+                };
+                std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+                return;
+            }
+
             const root_peek = try self.peekTag();
 
-            if (path.len == 0) {
-                return try self.read();
-            }
-
-            var remaining = path;
-
             if (root_peek.tag != .object and root_peek.tag != .array) {
-                // Root is not a container but path requires navigation
-                return null;
-            }
-
-            const first_segment = parsePathSegment(remaining) orelse return null;
-
-            if (first_segment.is_index) {
-                // Index access requires array
-                if (root_peek.tag != .array) return null;
-            } else {
-                // Key access requires object
-                if (root_peek.tag != .object) return null;
-            }
-
-            // Check depth limit before entering root container
-            if (limits.max_depth) |max| {
-                if (self.depth >= max) return error.MaxDepthExceeded;
-            }
-
-            // Enter the root container
-            self.pos += 1;
-            self.depth += 1;
-
-            // Track current container type
-            var current_is_array = (root_peek.tag == .array);
-
-            while (remaining.len > 0) {
-                const segment = parsePathSegment(remaining) orelse return null;
-
-                if (segment.is_index and !current_is_array) {
-                    // Index access on object, type mismatch
-                    return null;
-                }
-                if (!segment.is_index and current_is_array) {
-                    // Key access on array, type mismatch
-                    return null;
-                }
-
-                if (segment.is_index) {
-                    // Array index access
-                    const target_idx = segment.index;
-                    var idx: usize = 0;
-
-                    while (true) {
-                        const peek = try self.peekTag();
-
-                        if (peek.tag == .containerEnd) {
-                            // End of array, index not found
-                            self.pos += 1;
-                            self.depth -= 1;
-                            return null;
+                if (remaining > 0) {
+                    var has_empty = false;
+                    for (queries) |q| {
+                        if (!q.resolved and q.path.len == 0) {
+                            has_empty = true;
+                            break;
                         }
+                    }
 
-                        if (limits.max_array_length) |max| {
-                            if (idx >= max) return error.ArrayTooLarge;
-                        }
-
-                        if (idx == target_idx) {
-                            if (segment.rest.len == 0) {
-                                return try self.read();
-                            } else {
-                                if (peek.tag != .object and peek.tag != .array) {
-                                    // Need to navigate further but value is not a container
-                                    return null;
-                                }
-
-                                if (limits.max_depth) |max| {
-                                    if (self.depth >= max) return error.MaxDepthExceeded;
-                                }
-
-                                current_is_array = (peek.tag == .array);
-                                self.pos += 1;
-                                self.depth += 1;
-                                break;
+                    if (has_empty) {
+                        const root_val = try self.read();
+                        for (queries) |*q| {
+                            if (!q.resolved and q.path.len == 0) {
+                                q.value = root_val;
+                                q.resolved = true;
+                                remaining -= 1;
                             }
                         }
-
-                        // Skip this value
-                        try self.skipValue();
-                        idx += 1;
                     }
+                }
+
+                const LessIdx = struct {
+                    fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                        return lessThanByIndex({}, a, b);
+                    }
+                };
+                std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+                return;
+            }
+
+            const root_val = try self.read();
+            for (queries) |*q| {
+                if (!q.resolved and q.path.len == 0) {
+                    q.value = root_val;
+                    q.resolved = true;
+                    remaining -= 1;
+                }
+            }
+
+            if (remaining > 0) {
+                if (root_val == .object) {
+                    try self.readPathsObject(queries, 0, &remaining);
                 } else {
-                    // Object key access
-                    var found = false;
-                    var kv_count: usize = 0;
-
-                    while (true) {
-                        const peek = try self.peekTag();
-
-                        if (peek.tag == .containerEnd) {
-                            // End of object, key not found
-                            self.pos += 1;
-                            self.depth -= 1;
-                            return null;
-                        }
-
-                        if (limits.max_object_size) |max| {
-                            if (kv_count >= max) return error.ObjectTooLarge;
-                        }
-
-                        // Key must be bytes
-                        if (peek.tag != .varIntBytes and peek.tag != .bytes) {
-                            return null;
-                        }
-
-                        const key_slice = try self.readBytesSlice();
-
-                        if (std.mem.eql(u8, key_slice, segment.key)) {
-                            if (segment.rest.len == 0) {
-                                return try self.read();
-                            } else {
-                                const value_peek = try self.peekTag();
-                                if (value_peek.tag != .object and value_peek.tag != .array) {
-                                    // Need to navigate further but value is not a container
-                                    return null;
-                                }
-
-                                if (limits.max_depth) |max| {
-                                    if (self.depth >= max) return error.MaxDepthExceeded;
-                                }
-
-                                current_is_array = (value_peek.tag == .array);
-                                self.pos += 1;
-                                self.depth += 1;
-                                found = true;
-                                break;
-                            }
-                        } else {
-                            try self.skipValue();
-                        }
-
-                        kv_count += 1;
-                    }
-
-                    if (!found and segment.rest.len > 0) {
-                        return null;
-                    }
+                    try self.readPathsArray(queries, 0, &remaining);
                 }
-
-                remaining = segment.rest;
             }
 
-            return null;
+            const LessIdx = struct {
+                fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                    return lessThanByIndex({}, a, b);
+                }
+            };
+            std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
         }
 
-        /// Parses a single path segment from the path string.
-        /// Returns the segment info and remaining path, or null for malformed paths.
-        fn parsePathSegment(path: []const u8) ?PathSegment {
-            var i: usize = 0;
+        fn readPathsObject(self: *Self, queries: []PathQuery, path_depth: usize, remaining: *usize) Error!void {
+            var kv_count: usize = 0;
 
-            // Check for array index or quoted key at start: [N] or ['key'] or ["key"]
-            if (path.len > 0 and path[0] == '[') {
-                i = 1;
+            while (true) {
+                if (remaining.* == 0) {
+                    const target = self.depth - 1;
+                    try self.discardUntilDepth(target);
+                    return;
+                }
 
-                // Check if it's a quoted key
-                if (i < path.len and (path[i] == '\'' or path[i] == '"')) {
-                    const quote_char = path[i];
-                    i += 1;
-                    const key_start = i;
+                const peek = try self.peekTag();
+                if (peek.tag == .containerEnd) {
+                    _ = try self.read();
+                    return;
+                }
 
-                    // Find closing quote
-                    while (i < path.len and path[i] != quote_char) : (i += 1) {}
+                if (limits.max_object_size) |max| {
+                    if (kv_count >= max) return error.ObjectTooLarge;
+                }
 
-                    // Malformed: no closing quote found
-                    if (i >= path.len) return null;
+                // Keys must be bytes; if not, skip key+value and continue.
+                if (peek.tag != .varIntBytes and peek.tag != .bytes) {
+                    try self.skipValue();
+                    try self.skipValue();
+                    continue;
+                }
 
-                    const key = path[key_start..i];
+                const key_slice = try self.readBytesSlice();
+                defer kv_count += 1;
 
-                    // Skip past quote
-                    i += 1;
+                var match_start: ?usize = null;
+                var match_end: usize = 0;
+                var any_leaf = false;
+                var any_child = false;
 
-                    // Skip past ']' if present
-                    if (i < path.len and path[i] == ']') {
-                        i += 1;
-                    }
-
-                    // Skip '.' if present
-                    if (i < path.len and path[i] == '.') {
-                        i += 1;
-                    }
-
-                    return .{
-                        .is_index = false,
-                        .index = 0,
-                        .key = key,
-                        .rest = path[i..],
+                for (queries, 0..) |*q, i| {
+                    if (q.resolved) continue;
+                    const seg = path.segmentAtDepth(q.path, path_depth) orelse {
+                        q.resolved = true;
+                        remaining.* -= 1;
+                        continue;
                     };
+                    if (seg.is_index) {
+                        q.resolved = true;
+                        remaining.* -= 1;
+                        continue;
+                    }
+                    if (std.mem.eql(u8, seg.key, key_slice)) {
+                        if (match_start == null) match_start = i;
+                        match_end = i + 1;
+                        if (seg.rest.len == 0) {
+                            any_leaf = true;
+                        } else {
+                            any_child = true;
+                        }
+                    }
                 }
 
-                // Numeric index
-                while (i < path.len and path[i] != ']') : (i += 1) {}
-
-                // Malformed: no closing bracket
-                if (i >= path.len) return null;
-
-                const idx_str = path[1..i];
-                const index = std.fmt.parseInt(usize, idx_str, 10) catch return null;
-
-                // Skip past ']'
-                i += 1;
-
-                // Skip '.' if present
-                if (i < path.len and path[i] == '.') {
-                    i += 1;
+                if (match_start == null) {
+                    try self.skipValue();
+                    continue;
                 }
 
-                return .{
-                    .is_index = true,
-                    .index = index,
-                    .key = "",
-                    .rest = path[i..],
-                };
+                const matching = queries[match_start.?..match_end];
+
+                if (any_leaf) {
+                    const val = try self.read();
+                    for (matching) |*q| {
+                        if (q.resolved) continue;
+                        const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
+                        if (!seg.is_index and std.mem.eql(u8, seg.key, key_slice) and seg.rest.len == 0) {
+                            q.value = val;
+                            q.resolved = true;
+                            remaining.* -= 1;
+                        }
+                    }
+
+                    if (val == .object or val == .array) {
+                        if (any_child) {
+                            if (val == .object) {
+                                try self.readPathsObject(matching, path_depth + 1, remaining);
+                            } else {
+                                try self.readPathsArray(matching, path_depth + 1, remaining);
+                            }
+                        } else {
+                            const target = if (val == .object) val.object - 1 else val.array - 1;
+                            try self.discardUntilDepth(target);
+                        }
+                    } else if (any_child) {
+                        for (matching) |*q| {
+                            if (q.resolved) continue;
+                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
+                            if (!seg.is_index and std.mem.eql(u8, seg.key, key_slice) and seg.rest.len > 0) {
+                                q.resolved = true;
+                                remaining.* -= 1;
+                            }
+                        }
+                    }
+                } else {
+                    const val_peek = try self.peekTag();
+                    if (val_peek.tag != .object and val_peek.tag != .array) {
+                        for (matching) |*q| {
+                            if (q.resolved) continue;
+                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
+                            if (!seg.is_index and std.mem.eql(u8, seg.key, key_slice)) {
+                                q.resolved = true;
+                                remaining.* -= 1;
+                            }
+                        }
+                        try self.skipValue();
+                    } else {
+                        const val = try self.read();
+                        if (val == .object) {
+                            try self.readPathsObject(matching, path_depth + 1, remaining);
+                        } else {
+                            try self.readPathsArray(matching, path_depth + 1, remaining);
+                        }
+                    }
+                }
             }
+        }
 
-            // Check for quoted key without brackets: 'key' or "key"
-            if (path.len > 0 and (path[0] == '\'' or path[0] == '"')) {
-                const quote_char = path[0];
-                i = 1;
-                const key_start = i;
+        fn readPathsArray(self: *Self, queries: []PathQuery, path_depth: usize, remaining: *usize) Error!void {
+            var idx: usize = 0;
 
-                // Find closing quote
-                while (i < path.len and path[i] != quote_char) : (i += 1) {}
-
-                // Malformed: no closing quote found
-                if (i >= path.len) return null;
-
-                const key = path[key_start..i];
-
-                // Skip past quote
-                i += 1;
-
-                // Skip '.' if present
-                if (i < path.len and path[i] == '.') {
-                    i += 1;
+            while (true) {
+                if (remaining.* == 0) {
+                    const target = self.depth - 1;
+                    try self.discardUntilDepth(target);
+                    return;
                 }
 
-                return .{
-                    .is_index = false,
-                    .index = 0,
-                    .key = key,
-                    .rest = path[i..],
-                };
-            }
-
-            // Object key: read until '.', '[', or end
-            while (i < path.len and path[i] != '.' and path[i] != '[') : (i += 1) {}
-
-            const key = path[0..i];
-
-            // Determine rest
-            var rest_start = i;
-            if (i < path.len) {
-                if (path[i] == '.') {
-                    rest_start = i + 1;
+                const peek = try self.peekTag();
+                if (peek.tag == .containerEnd) {
+                    _ = try self.read();
+                    return;
                 }
-                // '[' is kept for next segment
-            }
 
-            return .{
-                .is_index = false,
-                .index = 0,
-                .key = key,
-                .rest = path[rest_start..],
-            };
+                if (limits.max_array_length) |max| {
+                    if (idx >= max) return error.ArrayTooLarge;
+                }
+
+                var match_start: ?usize = null;
+                var match_end: usize = 0;
+                var any_leaf = false;
+                var any_child = false;
+
+                for (queries, 0..) |*q, i| {
+                    if (q.resolved) continue;
+                    const seg = path.segmentAtDepth(q.path, path_depth) orelse {
+                        q.resolved = true;
+                        remaining.* -= 1;
+                        continue;
+                    };
+                    if (!seg.is_index) {
+                        q.resolved = true;
+                        remaining.* -= 1;
+                        continue;
+                    }
+                    if (seg.index == idx) {
+                        if (match_start == null) match_start = i;
+                        match_end = i + 1;
+                        if (seg.rest.len == 0) {
+                            any_leaf = true;
+                        } else {
+                            any_child = true;
+                        }
+                    }
+                }
+
+                if (match_start == null) {
+                    try self.skipValue();
+                    idx += 1;
+                    continue;
+                }
+
+                const matching = queries[match_start.?..match_end];
+
+                if (any_leaf) {
+                    const val = try self.read();
+                    for (matching) |*q| {
+                        if (q.resolved) continue;
+                        const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
+                        if (seg.is_index and seg.index == idx and seg.rest.len == 0) {
+                            q.value = val;
+                            q.resolved = true;
+                            remaining.* -= 1;
+                        }
+                    }
+
+                    if (val == .object or val == .array) {
+                        if (any_child) {
+                            if (val == .object) {
+                                try self.readPathsObject(matching, path_depth + 1, remaining);
+                            } else {
+                                try self.readPathsArray(matching, path_depth + 1, remaining);
+                            }
+                        } else {
+                            const target = if (val == .object) val.object - 1 else val.array - 1;
+                            try self.discardUntilDepth(target);
+                        }
+                    } else if (any_child) {
+                        for (matching) |*q| {
+                            if (q.resolved) continue;
+                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
+                            if (seg.is_index and seg.index == idx and seg.rest.len > 0) {
+                                q.resolved = true;
+                                remaining.* -= 1;
+                            }
+                        }
+                    }
+                } else {
+                    const val_peek = try self.peekTag();
+                    if (val_peek.tag != .object and val_peek.tag != .array) {
+                        for (matching) |*q| {
+                            if (q.resolved) continue;
+                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
+                            if (seg.is_index and seg.index == idx) {
+                                q.resolved = true;
+                                remaining.* -= 1;
+                            }
+                        }
+                        try self.skipValue();
+                    } else {
+                        const val = try self.read();
+                        if (val == .object) {
+                            try self.readPathsObject(matching, path_depth + 1, remaining);
+                        } else {
+                            try self.readPathsArray(matching, path_depth + 1, remaining);
+                        }
+                    }
+                }
+
+                idx += 1;
+            }
+        }
+
+        /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
+        /// Returns null if the path doesn't exist or points to an incompatible type.
+        pub fn readPath(self: *Self, path_str: []const u8) Error!?common.Value {
+            var q = [_]PathQuery{.{ .path = path_str }};
+            try self.readPaths(q[0..]);
+            return q[0].value;
         }
     };
 }

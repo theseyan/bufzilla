@@ -262,17 +262,17 @@ test "writer/applyUpdates: leaf, nested, and upsert" {
     const out_buf = out_aw.written();
     var reader = Reader(.{}).init(out_buf);
 
-    try std.testing.expectEqual(2, (try reader.readPath("a", .{})).?.i64);
-    try std.testing.expectEqualStrings("new", (try reader.readPath("b.d", .{})).?.bytes);
-    try std.testing.expectEqual(true, (try reader.readPath("b.c", .{})).?.bool);
-    try std.testing.expectEqual(5, (try reader.readPath("b.e.f", .{})).?.i64);
-    try std.testing.expectEqual(999, (try reader.readPath("x", .{})).?.i64);
+    try std.testing.expectEqual(2, (try reader.readPath("a")).?.i64);
+    try std.testing.expectEqualStrings("new", (try reader.readPath("b.d")).?.bytes);
+    try std.testing.expectEqual(true, (try reader.readPath("b.c")).?.bool);
+    try std.testing.expectEqual(5, (try reader.readPath("b.e.f")).?.i64);
+    try std.testing.expectEqual(999, (try reader.readPath("x")).?.i64);
 
-    try std.testing.expectEqual(10, (try reader.readPath("arr[0]", .{})).?.i64);
-    try std.testing.expectEqual(99, (try reader.readPath("arr[1]", .{})).?.i64);
-    const arr2 = (try reader.readPath("arr[2]", .{})).?;
+    try std.testing.expectEqual(10, (try reader.readPath("arr[0]")).?.i64);
+    try std.testing.expectEqual(99, (try reader.readPath("arr[1]")).?.i64);
+    const arr2 = (try reader.readPath("arr[2]")).?;
     try std.testing.expect(arr2 == .null);
-    try std.testing.expectEqual(33, (try reader.readPath("arr[3]", .{})).?.i64);
+    try std.testing.expectEqual(33, (try reader.readPath("arr[3]")).?.i64);
 }
 
 test "writer/applyUpdates: conflicting leaf and child updates" {
@@ -1107,15 +1107,71 @@ test "readPath: simple object key" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const name = try reader.readPath("name", .{});
+    const name = try reader.readPath("name");
     try std.testing.expect(name != null);
     try std.testing.expectEqualStrings("Alice", name.?.bytes);
 
-    const age = try reader.readPath("age", .{});
+    const age = try reader.readPath("age");
     try std.testing.expect(age != null);
     try std.testing.expectEqual(@as(i64, 30), age.?.i64);
 
     // Position should be unchanged
+    try std.testing.expectEqual(@as(usize, 0), reader.pos);
+}
+
+test "readPaths: multiple queries single pass" {
+    var buffer: [512]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    try writer.startObject();
+    try writer.writeAny("name");
+    try writer.writeAny("Alice");
+    try writer.writeAny("age");
+    try writer.writeAny(@as(i64, 30));
+    try writer.writeAny("address");
+    try writer.startObject();
+    try writer.writeAny("city");
+    try writer.writeAny("NYC");
+    try writer.endContainer();
+    try writer.writeAny("items");
+    try writer.startArray();
+    try writer.startObject();
+    try writer.writeAny("score");
+    try writer.writeAny(@as(i64, 10));
+    try writer.endContainer();
+    try writer.startObject();
+    try writer.writeAny("score");
+    try writer.writeAny(@as(i64, 20));
+    try writer.endContainer();
+    try writer.endContainer();
+    try writer.endContainer();
+
+    var reader = Reader(.{}).init(fixed.buffered());
+
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "name" },
+        .{ .path = "address.city" },
+        .{ .path = "items[1].score" },
+        .{ .path = "nonexistent.path" },
+        .{ .path = "" },
+        .{ .path = "[0" }, // malformed
+    };
+
+    try reader.readPaths(queries[0..]);
+
+    try std.testing.expectEqualStrings("name", queries[0].path);
+    try std.testing.expectEqualStrings("address.city", queries[1].path);
+    try std.testing.expectEqualStrings("items[1].score", queries[2].path);
+
+    try std.testing.expectEqualStrings("Alice", queries[0].value.?.bytes);
+    try std.testing.expectEqualStrings("NYC", queries[1].value.?.bytes);
+    try std.testing.expectEqual(@as(i64, 20), queries[2].value.?.i64);
+    try std.testing.expect(queries[3].value == null);
+    try std.testing.expect(queries[4].value != null and queries[4].value.? == .object);
+    try std.testing.expect(queries[5].value == null);
+
+    // Position should be unchanged.
     try std.testing.expectEqual(@as(usize, 0), reader.pos);
 }
 
@@ -1139,11 +1195,11 @@ test "readPath: nested object" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const name = try reader.readPath("person.name", .{});
+    const name = try reader.readPath("person.name");
     try std.testing.expect(name != null);
     try std.testing.expectEqualStrings("Bob", name.?.bytes);
 
-    const city = try reader.readPath("person.address.city", .{});
+    const city = try reader.readPath("person.address.city");
     try std.testing.expect(city != null);
     try std.testing.expectEqualStrings("NYC", city.?.bytes);
 }
@@ -1161,15 +1217,15 @@ test "readPath: array index" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const first = try reader.readPath("[0]", .{});
+    const first = try reader.readPath("[0]");
     try std.testing.expect(first != null);
     try std.testing.expectEqualStrings("first", first.?.bytes);
 
-    const second = try reader.readPath("[1]", .{});
+    const second = try reader.readPath("[1]");
     try std.testing.expect(second != null);
     try std.testing.expectEqualStrings("second", second.?.bytes);
 
-    const third = try reader.readPath("[2]", .{});
+    const third = try reader.readPath("[2]");
     try std.testing.expect(third != null);
     try std.testing.expectEqualStrings("third", third.?.bytes);
 }
@@ -1190,11 +1246,11 @@ test "readPath: array in object" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const first_item = try reader.readPath("items[0]", .{});
+    const first_item = try reader.readPath("items[0]");
     try std.testing.expect(first_item != null);
     try std.testing.expectEqualStrings("apple", first_item.?.bytes);
 
-    const third_item = try reader.readPath("items[2]", .{});
+    const third_item = try reader.readPath("items[2]");
     try std.testing.expect(third_item != null);
     try std.testing.expectEqualStrings("cherry", third_item.?.bytes);
 }
@@ -1234,19 +1290,19 @@ test "readPath: complex nested path" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const alice_name = try reader.readPath("users[0].name", .{});
+    const alice_name = try reader.readPath("users[0].name");
     try std.testing.expect(alice_name != null);
     try std.testing.expectEqualStrings("Alice", alice_name.?.bytes);
 
-    const bob_name = try reader.readPath("users[1].name", .{});
+    const bob_name = try reader.readPath("users[1].name");
     try std.testing.expect(bob_name != null);
     try std.testing.expectEqualStrings("Bob", bob_name.?.bytes);
 
-    const alice_first_score = try reader.readPath("users[0].scores[0]", .{});
+    const alice_first_score = try reader.readPath("users[0].scores[0]");
     try std.testing.expect(alice_first_score != null);
     try std.testing.expectEqual(@as(i64, 100), alice_first_score.?.i64);
 
-    const bob_second_score = try reader.readPath("users[1].scores[1]", .{});
+    const bob_second_score = try reader.readPath("users[1].scores[1]");
     try std.testing.expect(bob_second_score != null);
     try std.testing.expectEqual(@as(i64, 90), bob_second_score.?.i64);
 }
@@ -1263,10 +1319,10 @@ test "readPath: non-existent key returns null" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const missing = try reader.readPath("age", .{});
+    const missing = try reader.readPath("age");
     try std.testing.expect(missing == null);
 
-    const nested_missing = try reader.readPath("person.name", .{});
+    const nested_missing = try reader.readPath("person.name");
     try std.testing.expect(nested_missing == null);
 }
 
@@ -1281,7 +1337,7 @@ test "readPath: out of bounds array index returns null" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const out_of_bounds = try reader.readPath("[5]", .{});
+    const out_of_bounds = try reader.readPath("[5]");
     try std.testing.expect(out_of_bounds == null);
 }
 
@@ -1294,7 +1350,7 @@ test "readPath: empty path returns root" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const root = try reader.readPath("", .{});
+    const root = try reader.readPath("");
     try std.testing.expect(root != null);
     try std.testing.expectEqualStrings("hello", root.?.bytes);
 }
@@ -1319,9 +1375,9 @@ test "readPath: preserves reader position after multiple calls" {
     const saved_pos = reader.pos;
 
     // Multiple readPath calls
-    _ = try reader.readPath("a", .{});
-    _ = try reader.readPath("b", .{});
-    _ = try reader.readPath("nonexistent", .{});
+    _ = try reader.readPath("a");
+    _ = try reader.readPath("b");
+    _ = try reader.readPath("nonexistent");
 
     // Position should be unchanged
     try std.testing.expectEqual(saved_pos, reader.pos);
@@ -1340,11 +1396,11 @@ test "readPath: type mismatch returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // Trying to access index on non-array
-    const result = try reader.readPath("value[0]", .{});
+    const result = try reader.readPath("value[0]");
     try std.testing.expect(result == null);
 
     // Trying to access key on non-object
-    const result2 = try reader.readPath("value.key", .{});
+    const result2 = try reader.readPath("value.key");
     try std.testing.expect(result2 == null);
 }
 
@@ -1371,15 +1427,15 @@ test "readPath: nested arrays" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const val_0_0 = try reader.readPath("[0][0]", .{});
+    const val_0_0 = try reader.readPath("[0][0]");
     try std.testing.expect(val_0_0 != null);
     try std.testing.expectEqual(@as(i64, 1), val_0_0.?.i64);
 
-    const val_1_1 = try reader.readPath("[1][1]", .{});
+    const val_1_1 = try reader.readPath("[1][1]");
     try std.testing.expect(val_1_1 != null);
     try std.testing.expectEqual(@as(i64, 4), val_1_1.?.i64);
 
-    const val_2_0 = try reader.readPath("[2][0]", .{});
+    const val_2_0 = try reader.readPath("[2][0]");
     try std.testing.expect(val_2_0 != null);
     try std.testing.expectEqual(@as(i64, 5), val_2_0.?.i64);
 }
@@ -1406,27 +1462,27 @@ test "readPath: various value types" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const str_val = try reader.readPath("str", .{});
+    const str_val = try reader.readPath("str");
     try std.testing.expect(str_val != null);
     try std.testing.expectEqualStrings("hello", str_val.?.bytes);
 
-    const int_val = try reader.readPath("int", .{});
+    const int_val = try reader.readPath("int");
     try std.testing.expect(int_val != null);
     try std.testing.expectEqual(@as(i64, 42), int_val.?.i64);
 
-    const float_val = try reader.readPath("float", .{});
+    const float_val = try reader.readPath("float");
     try std.testing.expect(float_val != null);
     try std.testing.expectEqual(@as(f64, 3.14), float_val.?.f64);
 
-    const bool_t = try reader.readPath("bool_t", .{});
+    const bool_t = try reader.readPath("bool_t");
     try std.testing.expect(bool_t != null);
     try std.testing.expectEqual(true, bool_t.?.bool);
 
-    const bool_f = try reader.readPath("bool_f", .{});
+    const bool_f = try reader.readPath("bool_f");
     try std.testing.expect(bool_f != null);
     try std.testing.expectEqual(false, bool_f.?.bool);
 
-    const null_val = try reader.readPath("null_val", .{});
+    const null_val = try reader.readPath("null_val");
     try std.testing.expect(null_val != null);
     try std.testing.expect(null_val.? == .null);
 }
@@ -1447,15 +1503,15 @@ test "readPath: quoted keys with single quotes" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const john = try reader.readPath("['John Marston']", .{});
+    const john = try reader.readPath("['John Marston']");
     try std.testing.expect(john != null);
     try std.testing.expectEqual(@as(i64, 42), john.?.i64);
 
-    const dotted = try reader.readPath("['key.with.dots']", .{});
+    const dotted = try reader.readPath("['key.with.dots']");
     try std.testing.expect(dotted != null);
     try std.testing.expectEqualStrings("dotted", dotted.?.bytes);
 
-    const spacy = try reader.readPath("['has spaces']", .{});
+    const spacy = try reader.readPath("['has spaces']");
     try std.testing.expect(spacy != null);
     try std.testing.expectEqualStrings("spacy", spacy.?.bytes);
 }
@@ -1474,11 +1530,11 @@ test "readPath: quoted keys with double quotes" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const john = try reader.readPath("[\"John Marston\"]", .{});
+    const john = try reader.readPath("[\"John Marston\"]");
     try std.testing.expect(john != null);
     try std.testing.expectEqual(@as(i64, 42), john.?.i64);
 
-    const dotted = try reader.readPath("[\"key.with.dots\"]", .{});
+    const dotted = try reader.readPath("[\"key.with.dots\"]");
     try std.testing.expect(dotted != null);
     try std.testing.expectEqualStrings("dotted", dotted.?.bytes);
 }
@@ -1502,12 +1558,12 @@ test "readPath: nested quoted keys" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const age = try reader.readPath("persons['John Marston'].age", .{});
+    const age = try reader.readPath("persons['John Marston'].age");
     try std.testing.expect(age != null);
     try std.testing.expectEqual(@as(i64, 42), age.?.i64);
 
     // Also test with double quotes
-    const age2 = try reader.readPath("persons[\"John Marston\"].age", .{});
+    const age2 = try reader.readPath("persons[\"John Marston\"].age");
     try std.testing.expect(age2 != null);
     try std.testing.expectEqual(@as(i64, 42), age2.?.i64);
 }
@@ -1531,35 +1587,12 @@ test "readPath: mixed quoted and unquoted keys" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const val = try reader.readPath("data['special key'].normal", .{});
+    const val = try reader.readPath("data['special key'].normal");
     try std.testing.expect(val != null);
     try std.testing.expectEqual(@as(i64, 123), val.?.i64);
 }
 
-test "readPath: preserve_state false modifies position" {
-    var buffer: [128]u8 = undefined;
-    var fixed = Io.Writer.fixed(&buffer);
-    var writer = Writer.init(&fixed);
-
-    try writer.startObject();
-    try writer.writeAny("a");
-    try writer.writeAny(@as(i64, 1));
-    try writer.writeAny("b");
-    try writer.writeAny(@as(i64, 2));
-    try writer.endContainer();
-
-    var reader = Reader(.{}).init(fixed.buffered());
-
-    // With preserve_state = false, position should change
-    const initial_pos = reader.pos;
-    _ = try reader.readPath("a", .{ .preserve_state = false });
-
-    // Position should have changed (reset to 0 and then navigated)
-    // After finding "a", we're past the value
-    try std.testing.expect(reader.pos != initial_pos or reader.pos == 0);
-}
-
-test "readPath: preserve_state true does not modify position" {
+test "readPath: does not modify position" {
     var buffer: [128]u8 = undefined;
     var fixed = Io.Writer.fixed(&buffer);
     var writer = Writer.init(&fixed);
@@ -1579,8 +1612,7 @@ test "readPath: preserve_state true does not modify position" {
     const saved_pos = reader.pos;
     const saved_depth = reader.depth;
 
-    // With preserve_state = true, position should not change
-    _ = try reader.readPath("b", .{ .preserve_state = true });
+    _ = try reader.readPath("b");
 
     try std.testing.expectEqual(saved_pos, reader.pos);
     try std.testing.expectEqual(saved_depth, reader.depth);
@@ -1608,11 +1640,11 @@ test "readPath: quoted keys in arrays" {
 
     var reader = Reader(.{}).init(fixed.buffered());
 
-    const val1 = try reader.readPath("items[0]['name with space']", .{});
+    const val1 = try reader.readPath("items[0]['name with space']");
     try std.testing.expect(val1 != null);
     try std.testing.expectEqualStrings("val1", val1.?.bytes);
 
-    const val2 = try reader.readPath("items[1]['name with space']", .{});
+    const val2 = try reader.readPath("items[1]['name with space']");
     try std.testing.expect(val2 != null);
     try std.testing.expectEqualStrings("val2", val2.?.bytes);
 }
@@ -1630,7 +1662,7 @@ test "readPath: malformed path missing bracket returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // Missing closing bracket
-    const result = try reader.readPath("[0", .{});
+    const result = try reader.readPath("[0");
     try std.testing.expect(result == null);
 }
 
@@ -1647,11 +1679,11 @@ test "readPath: malformed path missing quote returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // Missing closing quote in bracket notation
-    const result = try reader.readPath("['key", .{});
+    const result = try reader.readPath("['key");
     try std.testing.expect(result == null);
 
     // Missing closing quote without brackets
-    const result2 = try reader.readPath("'key", .{});
+    const result2 = try reader.readPath("'key");
     try std.testing.expect(result2 == null);
 }
 
@@ -1667,7 +1699,7 @@ test "readPath: malformed path invalid index returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // Invalid index (not a number)
-    const result = try reader.readPath("[abc]", .{});
+    const result = try reader.readPath("[abc]");
     try std.testing.expect(result == null);
 }
 
@@ -1688,7 +1720,7 @@ test "readPath: propagates errors from malformed buffer" {
     var reader = Reader(.{}).init(truncated);
 
     // Should return error, not null
-    const result = reader.readPath("key", .{});
+    const result = reader.readPath("key");
     try std.testing.expectError(error.UnexpectedEof, result);
 }
 
@@ -1712,7 +1744,7 @@ test "readPath: propagates max_depth error" {
     // Reader with max_depth = 2 - should fail when trying to navigate 3 levels deep
     var reader = Reader(.{ .max_depth = 2 }).init(fixed.buffered());
 
-    const result = reader.readPath("a.b.c", .{});
+    const result = reader.readPath("a.b.c");
     try std.testing.expectError(error.MaxDepthExceeded, result);
 }
 
@@ -1732,8 +1764,30 @@ test "readPath: propagates max_bytes_length error" {
     // Reader with max_bytes_length = 50 - should fail when skipping the 100-byte string
     var reader = Reader(.{ .max_bytes_length = 50 }).init(fixed.buffered());
 
-    const result = reader.readPath("target", .{});
+    const result = reader.readPath("target");
     try std.testing.expectError(error.BytesTooLong, result);
+}
+
+test "readPaths: propagates max_bytes_length error" {
+    var buffer: [512]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    // Create structure with a long string that we need to skip
+    try writer.startObject();
+    try writer.writeAny("long_key");
+    try writer.writeAny("x" ** 100); // 100 byte string
+    try writer.writeAny("target");
+    try writer.writeAny(@as(i64, 42));
+    try writer.endContainer();
+
+    var reader = Reader(.{ .max_bytes_length = 50 }).init(fixed.buffered());
+
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "target" },
+    };
+
+    try std.testing.expectError(error.BytesTooLong, reader.readPaths(queries[0..]));
 }
 
 test "readPath: propagates max_array_length error" {
@@ -1751,8 +1805,29 @@ test "readPath: propagates max_array_length error" {
     // Reader with max_array_length = 10 - should fail when accessing index 15
     var reader = Reader(.{ .max_depth = 10, .max_array_length = 10 }).init(fixed.buffered());
 
-    const result = reader.readPath("[15]", .{});
+    const result = reader.readPath("[15]");
     try std.testing.expectError(error.ArrayTooLarge, result);
+}
+
+test "readPaths: propagates max_array_length error" {
+    var buffer: [512]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    // Create array with 20 elements
+    try writer.startArray();
+    for (0..20) |i| {
+        try writer.writeAny(@as(i64, @intCast(i)));
+    }
+    try writer.endContainer();
+
+    var reader = Reader(.{ .max_depth = 10, .max_array_length = 10 }).init(fixed.buffered());
+
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "[15]" },
+    };
+
+    try std.testing.expectError(error.ArrayTooLarge, reader.readPaths(queries[0..]));
 }
 
 test "readPath: propagates max_object_size error" {
@@ -1773,8 +1848,77 @@ test "readPath: propagates max_object_size error" {
     // Reader with max_object_size = 10 - should fail when looking for key15
     var reader = Reader(.{ .max_depth = 10, .max_object_size = 10 }).init(fixed.buffered());
 
-    const result = reader.readPath("key15", .{});
+    const result = reader.readPath("key15");
     try std.testing.expectError(error.ObjectTooLarge, result);
+}
+
+test "readPaths: propagates max_object_size error" {
+    var buffer: [1024]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    // Create object with 20 keys
+    try writer.startObject();
+    for (0..20) |i| {
+        var key_buf: [8]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "key{d}", .{i}) catch unreachable;
+        try writer.writeAny(key);
+        try writer.writeAny(@as(i64, @intCast(i)));
+    }
+    try writer.endContainer();
+
+    var reader = Reader(.{ .max_depth = 10, .max_object_size = 10 }).init(fixed.buffered());
+
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "key15" },
+    };
+
+    try std.testing.expectError(error.ObjectTooLarge, reader.readPaths(queries[0..]));
+}
+
+test "readPaths: non-container root returns only root on empty path" {
+    var buffer: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    try writer.writeAny(@as(i64, 5));
+
+    var reader = Reader(.{}).init(fixed.buffered());
+
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "" },
+        .{ .path = "a" },
+        .{ .path = "[0]" },
+    };
+
+    try reader.readPaths(queries[0..]);
+
+    try std.testing.expect(queries[0].value != null);
+    try std.testing.expectEqual(@as(i64, 5), queries[0].value.?.i64);
+    try std.testing.expect(queries[1].value == null);
+    try std.testing.expect(queries[2].value == null);
+}
+
+test "readPaths: root type mismatch yields null" {
+    var buffer: [128]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+
+    var reader = Reader(.{}).init(fixed.buffered());
+
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "[0]" },
+        .{ .path = "a" },
+    };
+
+    try reader.readPaths(queries[0..]);
+    try std.testing.expect(queries[0].value == null);
+    try std.testing.expectEqual(@as(i64, 1), queries[1].value.?.i64);
 }
 
 test "readPath: array root with key path returns null" {
@@ -1789,7 +1933,7 @@ test "readPath: array root with key path returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // Key path on array root should return null, not error
-    const result = try reader.readPath("name", .{});
+    const result = try reader.readPath("name");
     try std.testing.expect(result == null);
 }
 
@@ -1806,7 +1950,7 @@ test "readPath: object root with index path returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // Index path on object root should return null, not a value
-    const result = try reader.readPath("[0]", .{});
+    const result = try reader.readPath("[0]");
     try std.testing.expect(result == null);
 }
 
@@ -1828,10 +1972,10 @@ test "readPath: nested type mismatch returns null" {
     var reader = Reader(.{}).init(fixed.buffered());
 
     // data is an array, not object - key access should return null
-    const result = try reader.readPath("data.key", .{});
+    const result = try reader.readPath("data.key");
     try std.testing.expect(result == null);
 
     // Nested object access on array should return null
-    const result2 = try reader.readPath("data[0].nested", .{});
+    const result2 = try reader.readPath("data[0].nested");
     try std.testing.expect(result2 == null);
 }

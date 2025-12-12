@@ -104,7 +104,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data", .{});
+            const result = try reader.readPath("data");
             std.debug.assert(result != null);
         }
         const elapsed_ns = timer.read();
@@ -117,7 +117,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data.items[0].id", .{});
+            const result = try reader.readPath("data.items[0].id");
             std.debug.assert(result != null);
         }
         const elapsed_ns = timer.read();
@@ -134,7 +134,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath(path, .{});
+            const result = try reader.readPath(path);
             std.debug.assert(result != null);
         }
         const elapsed_ns = timer.read();
@@ -151,7 +151,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath(path, .{});
+            const result = try reader.readPath(path);
             std.debug.assert(result != null);
         }
         const elapsed_ns = timer.read();
@@ -164,7 +164,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data.target_at_end.nested.value", .{});
+            const result = try reader.readPath("data.target_at_end.nested.value");
             std.debug.assert(result != null);
             std.debug.assert(result.?.i64 == 42);
         }
@@ -178,7 +178,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data.target_at_end.nested.secret", .{});
+            const result = try reader.readPath("data.target_at_end.nested.secret");
             std.debug.assert(result != null);
             std.debug.assert(std.mem.eql(u8, result.?.bytes, "found_it!"));
         }
@@ -192,7 +192,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data.final_key", .{});
+            const result = try reader.readPath("data.final_key");
             std.debug.assert(result != null);
         }
         const elapsed_ns = timer.read();
@@ -205,25 +205,12 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data.nonexistent", .{});
+            const result = try reader.readPath("data.nonexistent");
             std.debug.assert(result == null);
         }
         const elapsed_ns = timer.read();
         const avg_ns = elapsed_ns / iterations;
         std.debug.print("Non-existent key (full scan):            {d:8} ns/op\n", .{avg_ns});
-    }
-
-    // Benchmark with preserve_state = false
-    {
-        var timer = try std.time.Timer.start();
-        for (0..iterations) |_| {
-            var reader = Reader(.{}).init(encoded);
-            const result = try reader.readPath("data.target_at_end.nested.value", .{ .preserve_state = false });
-            std.debug.assert(result != null);
-        }
-        const elapsed_ns = timer.read();
-        const avg_ns = elapsed_ns / iterations;
-        std.debug.print("END access (preserve_state=false):       {d:8} ns/op\n", .{avg_ns});
     }
 
     // applyUpdates over the whole buffer
@@ -265,7 +252,7 @@ pub fn main() !void {
         var timer = try std.time.Timer.start();
         for (0..iterations) |_| {
             var reader = Reader(.{}).init(encoded);
-            _ = try reader.readPath("data.target_at_end.nested.value", .{});
+            _ = try reader.readPath("data.target_at_end.nested.value");
         }
         const elapsed_ns = timer.read();
         const total_bytes_scanned = encoded.len * iterations;
