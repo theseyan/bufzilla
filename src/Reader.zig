@@ -262,7 +262,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
         }
 
         /// Skips a single value without materializing it.
-        fn skipValue(self: *Self) !void {
+        pub fn skipValue(self: *Self) !void {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
 
             const tag_byte = self.bytes[self.pos];

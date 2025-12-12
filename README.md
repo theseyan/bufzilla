@@ -115,6 +115,37 @@ try writer.endContainer(); // end array
 try writer.endContainer(); // end object
 ```
 
+### Streaming updates
+
+If you already have an encoded object buffer and want to update a few fields, `Writer.applyUpdates` can stream a new encoding efficiently in a single pass.
+Unchanged parts of the buffer are copied directly while only the changed fields are modified.
+
+```zig
+const bufzilla = @import("bufzilla");
+const Writer = bufzilla.Writer;
+
+// `encoded_bytes` is an existing encoded object
+
+var new_age: i64 = 31;
+var new_city: []const u8 = "Berlin";
+
+var updates = [_]Writer.Update{
+    Writer.Update.init("age", &new_age),
+    Writer.Update.init("profile.address.city", &new_city),
+    Writer.Update.init("new_key", &true), // upsert missing keys
+    Writer.Update.init("scores[5]", &@as(i64, 100)), // extend arrays, fills gaps with null
+};
+
+var out_writer = Writer.init(&aw.writer);
+try out_writer.applyUpdates(encoded_bytes, updates[0..]);
+```
+
+Note:
+- Paths follow the same syntax as `Reader.readPath`.
+- `Update.init` takes a pointer; the pointed-to value must stay alive for the duration of `applyUpdates`.
+- Missing keys/indices are inserted in the output encoding.
+- Errors are returned as `Writer.Error || ReadError || ApplyUpdatesError`.
+
 ### Inspecting encoded data as JSON
 
 The `Inspect` API renders encoded bufzilla data as pretty-printed JSON:
@@ -215,7 +246,7 @@ const missing = try reader.readPath("nonexistent.path", .{}); // null
 
 You can find more examples in the [unit tests](https://github.com/theseyan/bufzilla/tree/main/test).
 
-### Safety & Security
+### Safety against untrusted inputs
 
 When reading untrusted data, bufzilla provides configurable limits at compile time to prevent infinite recursion/stack overflow errors, with negligible performance loss.
 

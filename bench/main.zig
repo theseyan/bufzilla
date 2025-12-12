@@ -918,6 +918,50 @@ fn benchReadPathMissing() !void {
 }
 
 // ============================================================================
+// applyUpdates Benchmarks
+// ============================================================================
+
+fn benchApplyUpdatesSmall() !void {
+    const BufferLen = 2048;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+        var new_a: i64 = 2;
+        var new_d: []const u8 = "new";
+        var updates: [2]Writer.Update = undefined;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        // { a: 1, b: { d: "old" } }
+        try writer.startObject();
+        try writer.writeAny("a");
+        try writer.writeAny(@as(i64, 1));
+        try writer.writeAny("b");
+        try writer.startObject();
+        try writer.writeAny("d");
+        try writer.writeAny("old");
+        try writer.endContainer();
+        try writer.endContainer();
+        State.len = fixed.buffered().len;
+
+        State.updates = .{
+            Writer.Update.init("a", &State.new_a),
+            Writer.Update.init("b.d", &State.new_d),
+        };
+
+        State.initialized = true;
+    }
+
+    var out_buf: [BufferLen]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buf);
+    var out_writer = Writer.init(&out_fixed);
+    try out_writer.applyUpdates(State.buffer[0..State.len], State.updates[0..]);
+}
+
+// ============================================================================
 // Main Benchmark Runner
 // ============================================================================
 
@@ -1005,6 +1049,12 @@ pub fn main() !void {
     try benchmark("Array Index Access", 500000, benchReadPathArrayIndex);
     try benchmark("Mixed Path (obj.arr[i].key)", 200000, benchReadPathMixed);
     try benchmark("Non-existent Key", 500000, benchReadPathMissing);
+    std.debug.print("\n", .{});
+
+    // Updates
+    std.debug.print("Streaming Updates (applyUpdates):\n", .{});
+    std.debug.print("-" ** 80 ++ "\n", .{});
+    try benchmark("ApplyUpdates Small (2 patches)", 200000, benchApplyUpdatesSmall);
     std.debug.print("\n", .{});
 
     std.debug.print("=" ** 80 ++ "\n", .{});

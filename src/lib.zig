@@ -1,4 +1,6 @@
 pub const Writer = @import("Writer.zig");
+pub const Update = Writer.Update;
+pub const ApplyUpdatesError = @import("updates.zig").Error;
 
 const reader_mod = @import("Reader.zig");
 pub const Reader = reader_mod.Reader;

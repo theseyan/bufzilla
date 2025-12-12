@@ -1,6 +1,8 @@
 /// Writer API
 const std = @import("std");
 const common = @import("common.zig");
+const updates_mod = @import("updates.zig");
+const reader_mod = @import("Reader.zig");
 const Io = std.Io;
 
 const Writer = @This();
@@ -15,6 +17,39 @@ pub const Error = Io.Writer.Error;
 /// The caller is responsible for managing the writer's lifecycle (flushing, freeing, etc.)
 pub fn init(writer: *Io.Writer) Writer {
     return .{ .raw = writer };
+}
+
+/// A single update to apply to an already-encoded buffer.
+pub const Update = struct {
+    path: []const u8,
+    ctx: *const anyopaque,
+    writeFn: *const fn (writer: *Writer, ctx: *const anyopaque) Error!void,
+    applied: bool = false,
+
+    /// Creates an update that will write `new_value_ptr.*` at `path`.
+    pub fn init(path: []const u8, new_value_ptr: anytype) Update {
+        const PtrT = @TypeOf(new_value_ptr);
+        const ptr_info = @typeInfo(PtrT);
+        if (ptr_info != .pointer or ptr_info.pointer.size != .one) {
+            @compileError("Update.init expects a pointer to a value");
+        }
+        const T = @TypeOf(new_value_ptr.*);
+        return .{
+            .path = path,
+            .ctx = @ptrCast(new_value_ptr),
+            .writeFn = struct {
+                fn write(writer: *Writer, ctx: *const anyopaque) Error!void {
+                    const ptr: *const T = @ptrCast(@alignCast(ctx));
+                    try writer.writeAny(ptr.*);
+                }
+            }.write,
+        };
+    }
+};
+
+/// Applies a set of updates to an already-encoded object buffer, streaming the new encoding to the current writer.
+pub fn applyUpdates(self: *Writer, encoded_buf: []const u8, updates: []Update) (Error || reader_mod.Error || updates_mod.Error)!void {
+    try updates_mod.applyUpdates(Writer, self, encoded_buf, updates);
 }
 
 /// Writes a single data item to the underlying writer.

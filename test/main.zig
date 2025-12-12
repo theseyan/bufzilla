@@ -207,6 +207,226 @@ test "writer/fixed: pointer to array" {
 }
 
 // =============================================================================
+// Writer.applyUpdates Tests
+// =============================================================================
+
+test "writer/applyUpdates: leaf, nested, and upsert" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+
+    // Original object:
+    // { a: 1, b: { c: true, d: "old" }, arr: [10, 20] }
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(@as(i64, 1));
+    try writer.writeAny("b");
+    try writer.startObject();
+    try writer.writeAny("c");
+    try writer.writeAny(true);
+    try writer.writeAny("d");
+    try writer.writeAny("old");
+    try writer.endContainer();
+    try writer.writeAny("arr");
+    try writer.startArray();
+    try writer.writeAny(@as(i64, 10));
+    try writer.writeAny(@as(i64, 20));
+    try writer.endContainer();
+    try writer.endContainer();
+
+    const encoded = aw.written();
+
+    var new_a: i64 = 2;
+    var new_d: []const u8 = "new";
+    var new_x: i64 = 999;
+    var new_f: i64 = 5;
+    var new_arr1: i64 = 99;
+    var new_arr3: i64 = 33;
+
+    var updates = [_]Writer.Update{
+        Writer.Update.init("a", &new_a),
+        Writer.Update.init("b.d", &new_d),
+        Writer.Update.init("x", &new_x),
+        Writer.Update.init("b.e.f", &new_f),
+        Writer.Update.init("arr[1]", &new_arr1),
+        Writer.Update.init("arr[3]", &new_arr3),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try out_writer.applyUpdates(encoded, updates[0..]);
+
+    const out_buf = out_aw.written();
+    var reader = Reader(.{}).init(out_buf);
+
+    try std.testing.expectEqual(2, (try reader.readPath("a", .{})).?.i64);
+    try std.testing.expectEqualStrings("new", (try reader.readPath("b.d", .{})).?.bytes);
+    try std.testing.expectEqual(true, (try reader.readPath("b.c", .{})).?.bool);
+    try std.testing.expectEqual(5, (try reader.readPath("b.e.f", .{})).?.i64);
+    try std.testing.expectEqual(999, (try reader.readPath("x", .{})).?.i64);
+
+    try std.testing.expectEqual(10, (try reader.readPath("arr[0]", .{})).?.i64);
+    try std.testing.expectEqual(99, (try reader.readPath("arr[1]", .{})).?.i64);
+    const arr2 = (try reader.readPath("arr[2]", .{})).?;
+    try std.testing.expect(arr2 == .null);
+    try std.testing.expectEqual(33, (try reader.readPath("arr[3]", .{})).?.i64);
+}
+
+test "writer/applyUpdates: conflicting leaf and child updates" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.writeAny("b");
+    try writer.startObject();
+    try writer.writeAny("c");
+    try writer.writeAny(true);
+    try writer.endContainer();
+    try writer.endContainer();
+
+    const encoded = aw.written();
+
+    var new_b: i64 = 1;
+    var new_c: i64 = 2;
+
+    var updates = [_]Writer.Update{
+        Writer.Update.init("b", &new_b),
+        Writer.Update.init("b.c", &new_c),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ApplyUpdatesError.ConflictingUpdates, out_writer.applyUpdates(encoded, updates[0..]));
+}
+
+test "writer/applyUpdates: invalid root" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.writeAny(@as(i64, 1));
+
+    const encoded = aw.written();
+
+    var new_a: i64 = 2;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("a", &new_a),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ApplyUpdatesError.InvalidRoot, out_writer.applyUpdates(encoded, updates[0..]));
+}
+
+test "writer/applyUpdates: malformed path" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+
+    const encoded = aw.written();
+
+    var new_b: i64 = 2;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("a[", &new_b),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ApplyUpdatesError.MalformedPath, out_writer.applyUpdates(encoded, updates[0..]));
+}
+
+test "writer/applyUpdates: path type mismatch" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+
+    const encoded = aw.written();
+
+    var new_b: i64 = 2;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("a.b", &new_b),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ApplyUpdatesError.PathTypeMismatch, out_writer.applyUpdates(encoded, updates[0..]));
+}
+
+test "writer/applyUpdates: root replacement conflicts" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+
+    const encoded = aw.written();
+
+    var new_root: i64 = 123;
+    var new_a: i64 = 2;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("", &new_root),
+        Writer.Update.init("a", &new_a),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ApplyUpdatesError.ConflictingUpdates, out_writer.applyUpdates(encoded, updates[0..]));
+}
+
+test "writer/applyUpdates: propagates reader unexpected eof" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+
+    const encoded = aw.written();
+    std.debug.assert(encoded.len > 1);
+    const truncated = encoded[0 .. encoded.len - 1];
+
+    var new_z: i64 = 2;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("z", &new_z),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ReadError.UnexpectedEof, out_writer.applyUpdates(truncated, updates[0..]));
+}
+
+// =============================================================================
 // Reader Tests
 // =============================================================================
 
