@@ -433,30 +433,34 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 }
             }
 
-            const LessSeg = struct {
-                fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                    return path.lessThanPathSegments(a.path, b.path);
-                }
-            };
-            std.sort.pdq(PathQuery, queries, {}, LessSeg.lt);
-
-            if (remaining == 0) {
-                const LessIdx = struct {
+            if (queries.len > 1) {
+                const LessSeg = struct {
                     fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                        return lessThanByIndex({}, a, b);
+                        return path.lessThanPathSegments(a.path, b.path);
                     }
                 };
-                std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+                std.sort.pdq(PathQuery, queries, {}, LessSeg.lt);
+            }
+
+            if (remaining == 0) {
+                if (queries.len > 1) {
+                    const LessIdx = struct {
+                        fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                            return lessThanByIndex({}, a, b);
+                        }
+                    };
+                    std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+                }
                 return;
             }
 
             const root_peek = try self.peekTag();
 
-            if (root_peek.tag != .object and root_peek.tag != .array) {
-                if (remaining > 0) {
-                    var has_empty = false;
-                    for (queries) |q| {
-                        if (!q.resolved and q.path.len == 0) {
+                if (root_peek.tag != .object and root_peek.tag != .array) {
+                    if (remaining > 0) {
+                        var has_empty = false;
+                        for (queries) |q| {
+                            if (!q.resolved and q.path.len == 0) {
                             has_empty = true;
                             break;
                         }
@@ -471,15 +475,17 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining -= 1;
                             }
                         }
+                        }
                     }
-                }
 
-                const LessIdx = struct {
-                    fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                        return lessThanByIndex({}, a, b);
-                    }
-                };
-                std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+                if (queries.len > 1) {
+                    const LessIdx = struct {
+                        fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                            return lessThanByIndex({}, a, b);
+                        }
+                    };
+                    std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+                }
                 return;
             }
 
@@ -500,12 +506,14 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 }
             }
 
-            const LessIdx = struct {
-                fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                    return lessThanByIndex({}, a, b);
-                }
-            };
-            std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+            if (queries.len > 1) {
+                const LessIdx = struct {
+                    fn lt(_: void, a: PathQuery, b: PathQuery) bool {
+                        return lessThanByIndex({}, a, b);
+                    }
+                };
+                std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+            }
         }
 
         fn readPathsObject(self: *Self, queries: []PathQuery, path_depth: usize, remaining: *usize) Error!void {
@@ -513,8 +521,6 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             while (true) {
                 if (remaining.* == 0) {
-                    const target = self.depth - 1;
-                    try self.discardUntilDepth(target);
                     return;
                 }
 
@@ -635,8 +641,6 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             while (true) {
                 if (remaining.* == 0) {
-                    const target = self.depth - 1;
-                    try self.discardUntilDepth(target);
                     return;
                 }
 
