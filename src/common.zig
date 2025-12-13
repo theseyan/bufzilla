@@ -12,6 +12,10 @@ pub const Value = union(enum) {
     // Byte arrays backed by a variable length integer to represent it's size
     varIntBytes: []const u8,
 
+    // Small byte arrays where length (0..7) is stored in the tag data bits.
+    // Encoded payload is the raw bytes, length implied by the tag.
+    smallBytes: []const u8,
+
     // Integer types
     u64: u64,
     u32: u32,
@@ -29,6 +33,11 @@ pub const Value = union(enum) {
     // Simple types
     bool: bool,
     null: void,
+
+    // Small signed integers where magnitude (0..7) is stored in the tag data bits.
+    // For negative small ints, magnitude 0 is invalid (no negative zero).
+    smallIntPositive: u8,
+    smallIntNegative: u8,
 
     // Variable length signed integers (signed magnitude)
     // Encoded as an unsigned magnitude varint. Sign is stored in the tag type.

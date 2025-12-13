@@ -117,6 +117,13 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     }
                     return if (val_type == .object) .{ .object = self.depth } else .{ .array = self.depth };
                 },
+                .smallIntPositive => {
+                    return .{ .i64 = @as(i64, decoded_tag.data) };
+                },
+                .smallIntNegative => {
+                    if (decoded_tag.data == 0) return error.InvalidSignedMagnitude;
+                    return .{ .i64 = -@as(i64, decoded_tag.data) };
+                },
                 .varIntUnsigned => {
                     const size: usize = @as(usize, decoded_tag.data) + 1;
                     if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
@@ -213,6 +220,19 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     self.pos += len;
                     return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
                 },
+                .smallBytes => {
+                    const len: usize = decoded_tag.data;
+
+                    if (limits.max_bytes_length) |max| {
+                        if (len > max) return error.BytesTooLong;
+                    }
+
+                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+
+                    const str_ptr = self.pos;
+                    self.pos += len;
+                    return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
+                },
                 .bytes => {
                     const len = try self.readBytes(u64);
 
@@ -287,6 +307,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 .i16, .u16 => self.pos += 2,
                 .i8, .u8 => self.pos += 1,
                 .null, .bool => {},
+                .smallIntPositive, .smallIntNegative => {},
 
                 // Variable length integers
                 .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
@@ -296,6 +317,14 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 },
 
                 // Byte arrays
+                .smallBytes => {
+                    const len: usize = decoded.data;
+                    if (limits.max_bytes_length) |max| {
+                        if (len > max) return error.BytesTooLong;
+                    }
+                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                    self.pos += len;
+                },
                 .varIntBytes, .bytes => {
                     const len = try self.readBytesLength(val_type, decoded.data);
                     if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
@@ -324,10 +353,19 @@ pub fn Reader(comptime limits: ReadLimits) type {
                             .i16, .u16 => self.pos += 2,
                             .i8, .u8 => self.pos += 1,
                             .null, .bool => {},
+                            .smallIntPositive, .smallIntNegative => {},
                             .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
                                 const size: usize = @as(usize, inner_decoded.data) + 1;
                                 if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
                                 self.pos += size;
+                            },
+                            .smallBytes => {
+                                const len: usize = inner_decoded.data;
+                                if (limits.max_bytes_length) |max| {
+                                    if (len > max) return error.BytesTooLong;
+                                }
+                                if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                                self.pos += len;
                             },
                             .varIntBytes, .bytes => {
                                 const len = try self.readBytesLength(inner_type, inner_decoded.data);
@@ -359,11 +397,17 @@ pub fn Reader(comptime limits: ReadLimits) type {
             const decoded = common.decodeTag(tag_byte);
             const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
 
-            if (val_type != .varIntBytes and val_type != .bytes) {
+            if (val_type != .varIntBytes and val_type != .bytes and val_type != .smallBytes) {
                 return error.InvalidEnumTag;
             }
 
-            const len = try self.readBytesLength(val_type, decoded.data);
+            const len = if (val_type == .smallBytes) blk: {
+                const l: usize = decoded.data;
+                if (limits.max_bytes_length) |max| {
+                    if (l > max) return error.BytesTooLong;
+                }
+                break :blk l;
+            } else try self.readBytesLength(val_type, decoded.data);
             if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const result = self.bytes[self.pos..][0..len];
@@ -548,9 +592,10 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 }
 
                 // Keys must be bytes; if not, skip key+value and continue.
-                if (peek.tag != .varIntBytes and peek.tag != .bytes) {
+                if (peek.tag != .varIntBytes and peek.tag != .bytes and peek.tag != .smallBytes) {
                     try self.skipValue();
                     try self.skipValue();
+                    kv_count += 1;
                     continue;
                 }
 

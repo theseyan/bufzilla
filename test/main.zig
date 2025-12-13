@@ -48,7 +48,7 @@ test "writer/allocating: primitive data types" {
     @memcpy(shared_encoded[0..written.len], written);
     shared_encoded_len = written.len;
 
-    try std.testing.expect(written.len == 38);
+    try std.testing.expect(written.len == 33);
 }
 
 test "writer/allocating: zig struct serialization" {
@@ -139,6 +139,71 @@ test "writer/fixed: simple values" {
     try std.testing.expectEqual(true, (try reader.read()).bool);
     try std.testing.expectEqual(false, (try reader.read()).bool);
     try std.testing.expect((try reader.read()) == .null);
+}
+
+test "writer/fixed: small tags are used" {
+    // smallIntPositive
+    {
+        var buffer: [16]u8 = undefined;
+        var fixed = Io.Writer.fixed(&buffer);
+        var writer = Writer.init(&fixed);
+
+        try writer.writeAny(@as(i64, 7));
+        const written = fixed.buffered();
+        try std.testing.expectEqual(@as(usize, 1), written.len);
+
+        const decoded = Common.decodeTag(written[0]);
+        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallIntPositive))), decoded.tag);
+        try std.testing.expectEqual(@as(u3, 7), decoded.data);
+    }
+
+    // smallIntNegative
+    {
+        var buffer: [16]u8 = undefined;
+        var fixed = Io.Writer.fixed(&buffer);
+        var writer = Writer.init(&fixed);
+
+        try writer.writeAny(@as(i64, -7));
+        const written = fixed.buffered();
+        try std.testing.expectEqual(@as(usize, 1), written.len);
+
+        const decoded = Common.decodeTag(written[0]);
+        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallIntNegative))), decoded.tag);
+        try std.testing.expectEqual(@as(u3, 7), decoded.data);
+    }
+
+    // smallBytes
+    {
+        var buffer: [32]u8 = undefined;
+        var fixed = Io.Writer.fixed(&buffer);
+        var writer = Writer.init(&fixed);
+
+        try writer.writeAny("1234567"); // len=7
+        const written = fixed.buffered();
+        try std.testing.expectEqual(@as(usize, 1 + 7), written.len);
+
+        const decoded = Common.decodeTag(written[0]);
+        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallBytes))), decoded.tag);
+        try std.testing.expectEqual(@as(u3, 7), decoded.data);
+    }
+
+    // Struct keys also use smallBytes when short
+    {
+        const S = struct { a: i64 };
+        var buffer: [32]u8 = undefined;
+        var fixed = Io.Writer.fixed(&buffer);
+        var writer = Writer.init(&fixed);
+
+        try writer.writeAny(S{ .a = 1 });
+        const written = fixed.buffered();
+        try std.testing.expect(written.len > 0);
+
+        // [ object_tag ][ key_tag ][ 'a' ][ value_tag ][ end_tag ]
+        const key_decoded = Common.decodeTag(written[1]);
+        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallBytes))), key_decoded.tag);
+        try std.testing.expectEqual(@as(u3, 1), key_decoded.data);
+        try std.testing.expectEqual(@as(u8, 'a'), written[2]);
+    }
 }
 
 test "writer/fixed: empty containers" {
@@ -1020,6 +1085,25 @@ test "reader: max_object_size limit enforced" {
             break;
         }
     }
+}
+
+test "readPath: max_object_size counts non-byte keys" {
+    var enc_buffer: [256]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+
+    try writer.startObject();
+    // Non-byte keys: each pair should still count toward max_object_size
+    try writer.writeAny(@as(i64, 1));
+    try writer.writeAny(true);
+    try writer.writeAny(@as(i64, 2));
+    try writer.writeAny(true);
+    try writer.writeAny(@as(i64, 3));
+    try writer.writeAny(true);
+    try writer.endContainer();
+
+    var reader = Reader(.{ .max_depth = 10, .max_object_size = 2 }).init(enc_fixed.buffered());
+    try std.testing.expectError(error.ObjectTooLarge, reader.readPath("anything"));
 }
 
 test "reader: sibling containers have separate counts" {

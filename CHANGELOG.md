@@ -1,3 +1,14 @@
+# v0.3.2
+
+### Format Improvements
+- Change signed varint encoding to signed-magnitude via `varIntSignedPositive` / `varIntSignedNegative` tags (replaces the need for ZigZag encoding).
+- Add compact tags for very small values:
+  - `smallIntPositive` / `smallIntNegative` (inline magnitude 0..7 in tag byte)
+  - `smallBytes` (inline length 0..7 in tag byte)
+
+### Safety
+- Fix `Reader.readPath` / `Reader.readPaths` object size limit enforcement when encountering non-byte keys.
+
 # v0.3.1
 
 - Added `Reader.readPath` for fast path-based queries on encoded data using Javascript-style property access: `"name"`, `"address.city"`, `"items[0]"`, `"users[5].scores[0]"`.

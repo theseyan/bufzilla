@@ -57,6 +57,16 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
     const w = self.raw;
 
     switch (comptime tag) {
+        .smallIntPositive => {
+            std.debug.assert(data.smallIntPositive <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntPositive));
+            try w.writeByte(tag_byte);
+        },
+        .smallIntNegative => {
+            std.debug.assert(data.smallIntNegative > 0 and data.smallIntNegative <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntNegative));
+            try w.writeByte(tag_byte);
+        },
         .varIntUnsigned => {
             const varint = common.encodeVarInt(data.varIntUnsigned);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
@@ -85,6 +95,12 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try w.writeByte(tag_byte);
             try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
             try w.writeAll(data.varIntBytes);
+        },
+        .smallBytes => {
+            std.debug.assert(data.smallBytes.len <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallBytes.len));
+            try w.writeByte(tag_byte);
+            try w.writeAll(data.smallBytes);
         },
         .bool => {
             const val = @intFromBool(data.bool);
@@ -133,7 +149,11 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
             u16 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             u8 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
             i64 => {
-                if (data >= 0) {
+                if (data >= 0 and data <= 7) {
+                    try self.write(common.Value{ .smallIntPositive = @intCast(data) }, .smallIntPositive);
+                } else if (data < 0 and data >= -7) {
+                    try self.write(common.Value{ .smallIntNegative = @intCast(-data) }, .smallIntNegative);
+                } else if (data >= 0) {
                     try self.write(common.Value{ .varIntSignedPositive = data }, .varIntSignedPositive);
                 } else {
                     try self.write(common.Value{ .varIntSignedNegative = data }, .varIntSignedNegative);
@@ -161,7 +181,11 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .pointer => |ptr_info| {
             if (ptr_info.size == .slice and ptr_info.child == u8) {
                 // u8 slice (string)
-                try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                if (data.len <= 7) {
+                    try self.write(common.Value{ .smallBytes = data }, .smallBytes);
+                } else {
+                    try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                }
             } else if (ptr_info.size == .slice) {
                 // slice of any supported type
                 try self.startArray();
@@ -175,7 +199,12 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
                     .array => |arr| {
                         if (arr.child == u8) {
                             // pointer to byte array - write as bytes
-                            try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                            const slice: []const u8 = data;
+                            if (slice.len <= 7) {
+                                try self.write(common.Value{ .smallBytes = slice }, .smallBytes);
+                            } else {
+                                try self.write(common.Value{ .varIntBytes = slice }, .varIntBytes);
+                            }
                         } else {
                             // pointer to array of other types - write as array
                             try self.startArray();
@@ -199,19 +228,29 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
             inline for (struct_info.fields) |field| {
                 // Precompute encoded key prefix
                 const key_prefix = comptime blk: {
-                    const varint = common.encodeVarInt(field.name.len);
-                    const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
-                    const len_size: usize = @as(usize, varint.size) + 1;
-                    var prefix: [1 + 8 + field.name.len]u8 = undefined;
-                    prefix[0] = tag_byte;
-                    for (0..len_size) |i| {
-                        prefix[1 + i] = varint.bytes[i];
+                    if (field.name.len <= 7) {
+                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.smallBytes), @truncate(field.name.len));
+                        var prefix: [1 + field.name.len]u8 = undefined;
+                        prefix[0] = tag_byte;
+                        for (0..field.name.len) |i| {
+                            prefix[1 + i] = field.name[i];
+                        }
+                        break :blk prefix[0 .. 1 + field.name.len].*;
+                    } else {
+                        const varint = common.encodeVarInt(field.name.len);
+                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
+                        const len_size: usize = @as(usize, varint.size) + 1;
+                        var prefix: [1 + 8 + field.name.len]u8 = undefined;
+                        prefix[0] = tag_byte;
+                        for (0..len_size) |i| {
+                            prefix[1 + i] = varint.bytes[i];
+                        }
+                        // Include the field name in the prefix
+                        for (0..field.name.len) |i| {
+                            prefix[1 + len_size + i] = field.name[i];
+                        }
+                        break :blk prefix[0 .. 1 + len_size + field.name.len].*;
                     }
-                    // Include the field name in the prefix
-                    for (0..field.name.len) |i| {
-                        prefix[1 + len_size + i] = field.name[i];
-                    }
-                    break :blk prefix[0 .. 1 + len_size + field.name.len].*;
                 };
                 try self.raw.writeAll(&key_prefix);
                 const val = @field(data, field.name);

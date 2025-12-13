@@ -125,8 +125,11 @@ pub fn Inspect(comptime limits: ReadLimits) type {
                 .bool => try w.writeAll(if (val.bool) "true" else "false"),
                 .bytes => try self.writeString(val.bytes),
                 .varIntBytes => try self.writeString(val.varIntBytes),
+                .smallBytes => try self.writeString(val.smallBytes),
                 .null => try w.writeAll("null"),
                 .containerEnd => try w.writeAll("END"),
+                .smallIntPositive => try w.print("{d}", .{val.smallIntPositive}),
+                .smallIntNegative => try w.print("-{d}", .{val.smallIntNegative}),
                 .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {},
             }
         }
