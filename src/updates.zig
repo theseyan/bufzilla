@@ -245,9 +245,13 @@ fn applyObject(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: [
 
         const key_start = reader.pos;
         const key_val = try reader.read();
-        if (key_val != .bytes) return ReadError.InvalidEnumTag;
         const key_raw = buf[key_start..reader.pos];
-        const key = key_val.bytes;
+        const key = switch (key_val) {
+            .bytes => key_val.bytes,
+            .varIntBytes => key_val.varIntBytes,
+            .smallBytes => key_val.smallBytes,
+            else => return ReadError.InvalidEnumTag,
+        };
 
         var match_start: ?usize = null;
         var match_end: usize = 0;

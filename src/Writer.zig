@@ -68,6 +68,11 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntNegative));
             try w.writeByte(tag_byte);
         },
+        .smallUint => {
+            std.debug.assert(data.smallUint <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallUint));
+            try w.writeByte(tag_byte);
+        },
         .varIntUnsigned => {
             const varint = common.encodeVarInt(data.varIntUnsigned);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
@@ -221,10 +226,16 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .comptime_int => try self.writeAnyExplicit(i64, @intCast(data)),
         .comptime_float => try self.writeAnyExplicit(f64, @floatCast(data)),
         .int => switch (T) {
-            u64 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            u32 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            u16 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            u8 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
+            u64 => {
+                if (data <= 7) {
+                    try self.write(common.Value{ .smallUint = @intCast(data) }, .smallUint);
+                } else {
+                    try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned);
+                }
+            },
+            u32 => try self.writeAnyExplicit(u64, data),
+            u16 => try self.writeAnyExplicit(u64, data),
+            u8 => try self.writeAnyExplicit(u64, data),
             i64 => {
                 if (data >= 0 and data <= 7) {
                     try self.write(common.Value{ .smallIntPositive = @intCast(data) }, .smallIntPositive);

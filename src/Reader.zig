@@ -124,6 +124,9 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     if (decoded_tag.data == 0) return error.InvalidSignedMagnitude;
                     return .{ .i64 = -@as(i64, decoded_tag.data) };
                 },
+                .smallUint => {
+                    return .{ .u64 = @as(u64, decoded_tag.data) };
+                },
                 .varIntUnsigned => {
                     const size: usize = @as(usize, decoded_tag.data) + 1;
                     if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
@@ -206,18 +209,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     return .{ .bool = (decoded_tag.data != 0) };
                 },
                 .varIntBytes => {
-                    const size_len: usize = @as(usize, decoded_tag.data) + 1;
-                    if (size_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const intBytes = self.bytes[self.pos..(self.pos + size_len)];
-                    self.pos += size_len;
-                    const len = common.decodeVarInt(intBytes);
-
-                    // Check length limit
-                    if (limits.max_bytes_length) |max| {
-                        if (len > max) return error.BytesTooLong;
-                    }
-
+                    const len = try self.readBytesLength(.varIntBytes, decoded_tag.data);
                     if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
                     const str_ptr = self.pos;
@@ -238,39 +230,13 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
                 },
                 .typedArray => {
-                    if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-                    const elem_byte = self.bytes[self.pos];
-                    self.pos += 1;
-                    const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
-
-                    const count_len: usize = @as(usize, decoded_tag.data) + 1;
-                    if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                    const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
-                    self.pos += count_len;
-
-                    if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
-                    const count: usize = @intCast(count_u64);
-
-                    const elem_size = common.typedArrayElemSize(elem);
-                    const payload_len = std.math.mul(usize, count, elem_size) catch return error.BytesTooLong;
-
-                    if (limits.max_bytes_length) |max| {
-                        if (payload_len > max) return error.BytesTooLong;
-                    }
-                    if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-
+                    const hdr = try self.readTypedArrayHeader(decoded_tag.data);
                     const start = self.pos;
-                    self.pos += payload_len;
-                    return .{ .typedArray = .{ .elem = elem, .count = count, .bytes = self.bytes[start..][0..payload_len] } };
+                    self.pos += hdr.payload_len;
+                    return .{ .typedArray = .{ .elem = hdr.elem, .count = hdr.count, .bytes = self.bytes[start..][0..hdr.payload_len] } };
                 },
                 .bytes => {
-                    const len = try self.readBytes(u64);
-
-                    // Check length limit
-                    if (limits.max_bytes_length) |max| {
-                        if (len > max) return error.BytesTooLong;
-                    }
-
+                    const len = try self.readBytesLength(.bytes, decoded_tag.data);
                     if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
 
                     const str_ptr = self.pos;
@@ -320,17 +286,39 @@ pub fn Reader(comptime limits: ReadLimits) type {
             }
         }
 
-        /// Skips a single value without materializing it.
-        pub fn skipValue(self: *Self) !void {
+        const TypedArrayHeader = struct {
+            elem: common.TypedArrayElem,
+            count: usize,
+            payload_len: usize,
+        };
+
+        inline fn readTypedArrayHeader(self: *Self, tag_data: u3) !TypedArrayHeader {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-
-            const tag_byte = self.bytes[self.pos];
+            const elem_byte = self.bytes[self.pos];
             self.pos += 1;
+            const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
 
-            const decoded = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const count_len: usize = @as(usize, tag_data) + 1;
+            if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+            const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
+            self.pos += count_len;
 
-            switch (val_type) {
+            if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
+            const count: usize = @intCast(count_u64);
+
+            const payload_len = std.math.mul(usize, count, common.typedArrayElemSize(elem)) catch return error.BytesTooLong;
+            if (limits.max_bytes_length) |max| {
+                if (payload_len > max) return error.BytesTooLong;
+            }
+            if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+
+            return .{ .elem = elem, .count = count, .payload_len = payload_len };
+        }
+
+        const SkipEvent = enum { done, enter_container, exit_container };
+
+        inline fn skipOneValue(self: *Self, decoded: common.Tag, typ: std.meta.Tag(common.Value)) !SkipEvent {
+            switch (typ) {
                 // Fixed size types
                 .f64, .i64, .u64 => self.pos += 8,
                 .f32, .i32, .u32 => self.pos += 4,
@@ -338,7 +326,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 .i16, .u16 => self.pos += 2,
                 .i8, .u8 => self.pos += 1,
                 .null, .bool => {},
-                .smallIntPositive, .smallIntNegative => {},
+                .smallIntPositive, .smallIntNegative, .smallUint => {},
 
                 // Variable length integers
                 .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
@@ -357,33 +345,33 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     self.pos += len;
                 },
                 .typedArray => {
-                    if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-                    const elem_byte = self.bytes[self.pos];
-                    self.pos += 1;
-                    const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
-
-                    const count_len: usize = @as(usize, decoded.data) + 1;
-                    if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                    const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
-                    self.pos += count_len;
-
-                    if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
-                    const count: usize = @intCast(count_u64);
-
-                    const payload_len = std.math.mul(usize, count, common.typedArrayElemSize(elem)) catch return error.BytesTooLong;
-                    if (limits.max_bytes_length) |max| {
-                        if (payload_len > max) return error.BytesTooLong;
-                    }
-                    if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                    self.pos += payload_len;
+                    const hdr = try self.readTypedArrayHeader(decoded.data);
+                    self.pos += hdr.payload_len;
                 },
                 .varIntBytes, .bytes => {
-                    const len = try self.readBytesLength(val_type, decoded.data);
+                    const len = try self.readBytesLength(typ, decoded.data);
                     if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
                     self.pos += len;
                 },
 
-                // Containers
+                .array, .object => return .enter_container,
+                .containerEnd => return .exit_container,
+            }
+
+            return .done;
+        }
+
+        /// Skips a single value without materializing it.
+        pub fn skipValue(self: *Self) !void {
+            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+
+            const tag_byte = self.bytes[self.pos];
+            self.pos += 1;
+
+            const decoded = common.decodeTag(tag_byte);
+            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+
+            switch (val_type) {
                 .array, .object => {
                     if (limits.max_depth) |max| {
                         if (self.depth >= max) return error.MaxDepthExceeded;
@@ -399,65 +387,22 @@ pub fn Reader(comptime limits: ReadLimits) type {
                         const inner_decoded = common.decodeTag(inner_tag);
                         const inner_type = try std.meta.intToEnum(std.meta.Tag(common.Value), inner_decoded.tag);
 
-                        switch (inner_type) {
-                            .f64, .i64, .u64 => self.pos += 8,
-                            .f32, .i32, .u32 => self.pos += 4,
-                            .f16 => self.pos += 2,
-                            .i16, .u16 => self.pos += 2,
-                            .i8, .u8 => self.pos += 1,
-                            .null, .bool => {},
-                            .smallIntPositive, .smallIntNegative => {},
-                            .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
-                                const size: usize = @as(usize, inner_decoded.data) + 1;
-                                if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
-                                self.pos += size;
-                            },
-                            .smallBytes => {
-                                const len: usize = inner_decoded.data;
-                                if (limits.max_bytes_length) |max| {
-                                    if (len > max) return error.BytesTooLong;
-                                }
-                                if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                                self.pos += len;
-                            },
-                            .typedArray => {
-                                if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-                                const elem_byte = self.bytes[self.pos];
-                                self.pos += 1;
-                                const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
-
-                                const count_len: usize = @as(usize, inner_decoded.data) + 1;
-                                if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                                const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
-                                self.pos += count_len;
-
-                                if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
-                                const count: usize = @intCast(count_u64);
-
-                                const payload_len = std.math.mul(usize, count, common.typedArrayElemSize(elem)) catch return error.BytesTooLong;
-                                if (limits.max_bytes_length) |max| {
-                                    if (payload_len > max) return error.BytesTooLong;
-                                }
-                                if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                                self.pos += payload_len;
-                            },
-                            .varIntBytes, .bytes => {
-                                const len = try self.readBytesLength(inner_type, inner_decoded.data);
-                                if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                                self.pos += len;
-                            },
-                            .array, .object => {
+                        const ev = try skipOneValue(self, inner_decoded, inner_type);
+                        switch (ev) {
+                            .done => {},
+                            .enter_container => {
                                 if (limits.max_depth) |max| {
                                     if (self.depth + nest_depth >= max) return error.MaxDepthExceeded;
                                 }
                                 nest_depth += 1;
                             },
-                            .containerEnd => nest_depth -= 1,
+                            .exit_container => nest_depth -= 1,
                         }
                     }
                 },
 
                 .containerEnd => return error.UnexpectedContainerEnd,
+                else => _ = try skipOneValue(self, decoded, val_type),
             }
         }
 

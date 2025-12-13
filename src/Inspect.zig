@@ -171,6 +171,7 @@ pub fn Inspect(comptime limits: ReadLimits) type {
                     if (!std.math.isFinite(f)) return error.NonFiniteFloat;
                     try w.printFloat(f, .{ .precision = self.options.float_precision, .mode = .decimal });
                 },
+                .smallUint => try w.print("{d}", .{val.smallUint}),
                 .i64 => try w.print("{d}", .{val.i64}),
                 .i32 => try w.print("{d}", .{val.i32}),
                 .i16 => try w.print("{d}", .{val.i16}),

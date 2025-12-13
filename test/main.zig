@@ -1028,6 +1028,27 @@ test "writer/reader: u64 max value" {
     try std.testing.expectEqual(val, read_val.u64);
 }
 
+test "writer/reader: smallUint encodes 0..7" {
+    var buffer: [16]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    try writer.writeAny(@as(u64, 7));
+
+    const written = fixed.buffered();
+    try std.testing.expectEqual(@as(usize, 1), written.len);
+
+    const decoded = Common.decodeTag(written[0]);
+    const tag = try std.meta.intToEnum(std.meta.Tag(Value), decoded.tag);
+    try std.testing.expectEqual(std.meta.Tag(Value).smallUint, tag);
+    try std.testing.expectEqual(@as(u3, 7), decoded.data);
+
+    var reader = Reader(.{}).init(written);
+    const read_val = try reader.read();
+    try std.testing.expect(read_val == .u64);
+    try std.testing.expectEqual(@as(u64, 7), read_val.u64);
+}
+
 // =============================================================================
 // Float Tests
 // =============================================================================

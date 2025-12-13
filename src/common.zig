@@ -154,6 +154,9 @@ pub const Value = union(enum) {
     smallIntPositive: u8,
     smallIntNegative: u8,
 
+    // Small unsigned integers where value (0..7) is stored in the tag data bits.
+    smallUint: u8,
+
     // Variable length signed integers (signed magnitude)
     // Encoded as an unsigned magnitude varint. Sign is stored in the tag type.
     // In encoded form, they can take anywhere from 1 to 8 bytes.
