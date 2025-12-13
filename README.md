@@ -10,6 +10,7 @@ bufzilla is ideal for serializing JSON-like objects and arrays, and has the foll
 - **Portable** across endianness and architectures.
 - **Schemaless**, fully self-describing format; no "pre-compilation" step is necessary.
 - **Zero-copy** reads directly from the encoded bytes.
+- **Zero internal allocations** while encoding/decoding.
 - **Variable length integer encoding** enabled by default, no wasted bytes.
 - **Safety** against untrusted inputs with configurable, zero-overhead parsing limits.
 - Data can be read _linearly_ without any intermediate representation (eg. trees).
@@ -113,6 +114,15 @@ try writer.writeAny(@as(i64, 100));
 try writer.writeAny(@as(i64, 95));
 try writer.endContainer(); // end array
 try writer.endContainer(); // end object
+```
+
+### Typed arrays
+
+When all elements of an array have the same numeric type, and the length is known upfront, you can use a packed typed array which is much more space-efficient:
+
+```zig
+const vec = [_]f32{1.0} ** 768;
+try writer.writeTypedArray(&vec);
 ```
 
 ### Streaming updates

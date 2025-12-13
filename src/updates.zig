@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("common.zig");
 const reader_mod = @import("Reader.zig");
 const path = @import("path.zig");
+const Io = std.Io;
 
 pub const Error = error{
     /// Root value is not an object
@@ -22,6 +23,157 @@ fn peekTagType(reader: anytype, buf: []const u8) ReadError!std.meta.Tag(common.V
     if (reader.pos >= buf.len) return ReadError.UnexpectedEof;
     const decoded = common.decodeTag(buf[reader.pos]);
     return std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+}
+
+fn decodeUpdateValue(comptime WriterT: type, upd: anytype) (WriterT.Error || ReadError)!common.Value {
+    var tmp_buf: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&tmp_buf);
+    var tmp_writer = WriterT.init(&fixed);
+    try upd.writeFn(&tmp_writer, upd.ctx);
+    var r = reader_mod.Reader(.{}).init(fixed.buffered());
+    return try r.read();
+}
+
+fn writeTypedArrayElement(comptime WriterT: type, writer: *WriterT, elem: common.TypedArrayElem, val: common.Value) (ReadError || WriterT.Error)!void {
+    switch (elem) {
+        .u8 => {
+            const v: u8 = switch (val) {
+                .u8 => val.u8,
+                .u64 => @intCast(val.u64),
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeByte(v);
+        },
+        .i8 => {
+            const v: i8 = switch (val) {
+                .i8 => val.i8,
+                .i64 => @intCast(val.i64),
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeByte(@bitCast(v));
+        },
+        .u16 => {
+            const v_u16: u16 = switch (val) {
+                .u16 => val.u16,
+                .u64 => @intCast(val.u64),
+                .i64 => blk: {
+                    if (val.i64 < 0) return ReadError.InvalidEnumTag;
+                    break :blk @intCast(val.i64);
+                },
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeInt(u16, v_u16, .little);
+        },
+        .i16 => {
+            const v: i16 = switch (val) {
+                .i16 => val.i16,
+                .i64 => @intCast(val.i64),
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeInt(i16, v, .little);
+        },
+        .u32 => {
+            const v: u32 = switch (val) {
+                .u32 => val.u32,
+                .u64 => @intCast(val.u64),
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeInt(u32, v, .little);
+        },
+        .i32 => {
+            const v: i32 = switch (val) {
+                .i32 => val.i32,
+                .i64 => @intCast(val.i64),
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeInt(i32, v, .little);
+        },
+        .u64 => {
+            const v: u64 = switch (val) {
+                .u64 => val.u64,
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeInt(u64, v, .little);
+        },
+        .i64 => {
+            const v: i64 = switch (val) {
+                .i64 => val.i64,
+                else => return ReadError.InvalidEnumTag,
+            };
+            try writer.raw.writeInt(i64, v, .little);
+        },
+        .f16 => {
+            const bits: u16 = @bitCast(switch (val) {
+                .f16 => val.f16,
+                else => return ReadError.InvalidEnumTag,
+            });
+            try writer.raw.writeInt(u16, bits, .little);
+        },
+        .f32 => {
+            const bits: u32 = @bitCast(switch (val) {
+                .f32 => val.f32,
+                else => return ReadError.InvalidEnumTag,
+            });
+            try writer.raw.writeInt(u32, bits, .little);
+        },
+        .f64 => {
+            const bits: u64 = @bitCast(switch (val) {
+                .f64 => val.f64,
+                else => return ReadError.InvalidEnumTag,
+            });
+            try writer.raw.writeInt(u64, bits, .little);
+        },
+    }
+}
+
+fn applyTypedArray(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: []const u8, updates: anytype, depth: usize) (Error || ReadError || WriterT.Error)!void {
+    const start_pos = reader.pos;
+    const ta_val = try reader.read();
+    if (ta_val != .typedArray) return ReadError.InvalidEnumTag;
+
+    const payload_start: usize = @intFromPtr(ta_val.typedArray.bytes.ptr) - @intFromPtr(buf.ptr);
+    try writer.raw.writeAll(buf[start_pos..payload_start]);
+
+    const elem = ta_val.typedArray.elem;
+    const count = ta_val.typedArray.count;
+    const payload = ta_val.typedArray.bytes;
+    const elem_size = common.typedArrayElemSize(elem);
+
+    var cursor: usize = 0;
+
+    var i: usize = 0;
+    while (i < updates.len) {
+        const seg_i = path.segmentAtDepth(updates[i].path, depth) orelse return Error.MalformedPath;
+        if (!seg_i.is_index) return Error.PathTypeMismatch;
+        if (seg_i.rest.len != 0) return Error.PathTypeMismatch;
+        const idx = seg_i.index;
+        if (idx >= count) return Error.IndexOutOfRange;
+
+        var group_end: usize = i + 1;
+        var leaf_last: usize = i;
+        while (group_end < updates.len) : (group_end += 1) {
+            const seg_g = path.segmentAtDepth(updates[group_end].path, depth) orelse return Error.MalformedPath;
+            if (!seg_g.is_index) return Error.PathTypeMismatch;
+            if (seg_g.index != idx) break;
+            if (seg_g.rest.len != 0) return Error.PathTypeMismatch;
+            leaf_last = group_end;
+        }
+
+        for (updates[i..group_end]) |*upd| {
+            upd.applied = true;
+        }
+
+        const off = idx * elem_size;
+        try writer.raw.writeAll(payload[cursor..off]);
+
+        const decoded_val = try decodeUpdateValue(WriterT, &updates[leaf_last]);
+        try writeTypedArrayElement(WriterT, writer, elem, decoded_val);
+
+        cursor = off + elem_size;
+        i = group_end;
+    }
+
+    try writer.raw.writeAll(payload[cursor..]);
 }
 
 pub fn applyUpdates(comptime WriterT: type, writer: *WriterT, encoded_buf: []const u8, updates: anytype) (Error || ReadError || WriterT.Error)!void {
@@ -145,7 +297,13 @@ fn applyObject(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: [
 
         // Child updates only
         const val_tag = try peekTagType(reader, buf);
-        if (val_tag != .object and val_tag != .array) return Error.PathTypeMismatch;
+        if (val_tag != .object and val_tag != .array and val_tag != .typedArray) return Error.PathTypeMismatch;
+
+        if (val_tag == .typedArray) {
+            const child_updates = updates[child_start.?..match_end];
+            try applyTypedArray(WriterT, reader, writer, buf, child_updates, depth + 1);
+            continue;
+        }
 
         const open_start = reader.pos;
         const open_val = try reader.read();
@@ -212,17 +370,22 @@ fn applyArray(comptime WriterT: type, reader: anytype, writer: *WriterT, buf: []
                 try reader.skipValue();
             } else {
                 const val_tag = try peekTagType(reader, buf);
-                if (val_tag != .object and val_tag != .array) return Error.PathTypeMismatch;
+                if (val_tag != .object and val_tag != .array and val_tag != .typedArray) return Error.PathTypeMismatch;
 
-                const open_start = reader.pos;
-                const open_val = try reader.read();
-                try writer.raw.writeAll(buf[open_start..reader.pos]);
-
-                const child_updates = updates[child_start.?..match_end];
-                if (open_val == .object) {
-                    try applyObject(WriterT, reader, writer, buf, child_updates, depth + 1);
+                if (val_tag == .typedArray) {
+                    const child_updates = updates[child_start.?..match_end];
+                    try applyTypedArray(WriterT, reader, writer, buf, child_updates, depth + 1);
                 } else {
-                    try applyArray(WriterT, reader, writer, buf, child_updates, depth + 1);
+                    const open_start = reader.pos;
+                    const open_val = try reader.read();
+                    try writer.raw.writeAll(buf[open_start..reader.pos]);
+
+                    const child_updates = updates[child_start.?..match_end];
+                    if (open_val == .object) {
+                        try applyObject(WriterT, reader, writer, buf, child_updates, depth + 1);
+                    } else {
+                        try applyArray(WriterT, reader, writer, buf, child_updates, depth + 1);
+                    }
                 }
             }
         }

@@ -5,6 +5,8 @@
 - Add compact tags for very small values:
   - `smallIntPositive` / `smallIntNegative` (inline magnitude 0..7 in tag byte)
   - `smallBytes` (inline length 0..7 in tag byte)
+- Add `typedArray` for packed numeric vectors.
+- Add native `f16` float value encoding.
 
 ### Safety
 - Fix `Reader.readPath` / `Reader.readPaths` object size limit enforcement when encountering non-byte keys.

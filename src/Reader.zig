@@ -163,6 +163,10 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     const f = try self.readBytes(f32);
                     return .{ .f32 = f };
                 },
+                .f16 => {
+                    const bits = try self.readBytes(u16);
+                    return .{ .f16 = @bitCast(bits) };
+                },
                 .i64 => {
                     const i = try self.readBytes(i64);
                     return .{ .i64 = i };
@@ -232,6 +236,32 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     const str_ptr = self.pos;
                     self.pos += len;
                     return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
+                },
+                .typedArray => {
+                    if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+                    const elem_byte = self.bytes[self.pos];
+                    self.pos += 1;
+                    const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
+
+                    const count_len: usize = @as(usize, decoded_tag.data) + 1;
+                    if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                    const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
+                    self.pos += count_len;
+
+                    if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
+                    const count: usize = @intCast(count_u64);
+
+                    const elem_size = common.typedArrayElemSize(elem);
+                    const payload_len = std.math.mul(usize, count, elem_size) catch return error.BytesTooLong;
+
+                    if (limits.max_bytes_length) |max| {
+                        if (payload_len > max) return error.BytesTooLong;
+                    }
+                    if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+
+                    const start = self.pos;
+                    self.pos += payload_len;
+                    return .{ .typedArray = .{ .elem = elem, .count = count, .bytes = self.bytes[start..][0..payload_len] } };
                 },
                 .bytes => {
                     const len = try self.readBytes(u64);
@@ -304,6 +334,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 // Fixed size types
                 .f64, .i64, .u64 => self.pos += 8,
                 .f32, .i32, .u32 => self.pos += 4,
+                .f16 => self.pos += 2,
                 .i16, .u16 => self.pos += 2,
                 .i8, .u8 => self.pos += 1,
                 .null, .bool => {},
@@ -324,6 +355,27 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     }
                     if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
                     self.pos += len;
+                },
+                .typedArray => {
+                    if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+                    const elem_byte = self.bytes[self.pos];
+                    self.pos += 1;
+                    const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
+
+                    const count_len: usize = @as(usize, decoded.data) + 1;
+                    if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                    const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
+                    self.pos += count_len;
+
+                    if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
+                    const count: usize = @intCast(count_u64);
+
+                    const payload_len = std.math.mul(usize, count, common.typedArrayElemSize(elem)) catch return error.BytesTooLong;
+                    if (limits.max_bytes_length) |max| {
+                        if (payload_len > max) return error.BytesTooLong;
+                    }
+                    if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                    self.pos += payload_len;
                 },
                 .varIntBytes, .bytes => {
                     const len = try self.readBytesLength(val_type, decoded.data);
@@ -350,6 +402,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                         switch (inner_type) {
                             .f64, .i64, .u64 => self.pos += 8,
                             .f32, .i32, .u32 => self.pos += 4,
+                            .f16 => self.pos += 2,
                             .i16, .u16 => self.pos += 2,
                             .i8, .u8 => self.pos += 1,
                             .null, .bool => {},
@@ -366,6 +419,27 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 }
                                 if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
                                 self.pos += len;
+                            },
+                            .typedArray => {
+                                if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+                                const elem_byte = self.bytes[self.pos];
+                                self.pos += 1;
+                                const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
+
+                                const count_len: usize = @as(usize, inner_decoded.data) + 1;
+                                if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                                const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
+                                self.pos += count_len;
+
+                                if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
+                                const count: usize = @intCast(count_u64);
+
+                                const payload_len = std.math.mul(usize, count, common.typedArrayElemSize(elem)) catch return error.BytesTooLong;
+                                if (limits.max_bytes_length) |max| {
+                                    if (payload_len > max) return error.BytesTooLong;
+                                }
+                                if (payload_len > self.bytes.len - self.pos) return error.UnexpectedEof;
+                                self.pos += payload_len;
                             },
                             .varIntBytes, .bytes => {
                                 const len = try self.readBytesLength(inner_type, inner_decoded.data);
@@ -660,6 +734,10 @@ pub fn Reader(comptime limits: ReadLimits) type {
                             const target = if (val == .object) val.object - 1 else val.array - 1;
                             try self.discardUntilDepth(target);
                         }
+                    } else if (val == .typedArray) {
+                        if (any_child) {
+                            self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
+                        }
                     } else if (any_child) {
                         for (matching) |*q| {
                             if (q.resolved) continue;
@@ -672,7 +750,11 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     }
                 } else {
                     const val_peek = try self.peekTag();
-                    if (val_peek.tag != .object and val_peek.tag != .array) {
+                    if (val_peek.tag == .typedArray) {
+                        const val = try self.read();
+                        std.debug.assert(val == .typedArray);
+                        self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
+                    } else if (val_peek.tag != .object and val_peek.tag != .array) {
                         for (matching) |*q| {
                             if (q.resolved) continue;
                             const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
@@ -771,6 +853,10 @@ pub fn Reader(comptime limits: ReadLimits) type {
                             const target = if (val == .object) val.object - 1 else val.array - 1;
                             try self.discardUntilDepth(target);
                         }
+                    } else if (val == .typedArray) {
+                        if (any_child) {
+                            self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
+                        }
                     } else if (any_child) {
                         for (matching) |*q| {
                             if (q.resolved) continue;
@@ -783,7 +869,11 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     }
                 } else {
                     const val_peek = try self.peekTag();
-                    if (val_peek.tag != .object and val_peek.tag != .array) {
+                    if (val_peek.tag == .typedArray) {
+                        const val = try self.read();
+                        std.debug.assert(val == .typedArray);
+                        self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
+                    } else if (val_peek.tag != .object and val_peek.tag != .array) {
                         for (matching) |*q| {
                             if (q.resolved) continue;
                             const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
@@ -806,6 +896,57 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 idx += 1;
             }
         }
+
+        fn resolveTypedArrayIndexQueries(self: *Self, ta: common.TypedArray, queries: []PathQuery, path_depth: usize, remaining: *usize) void {
+            _ = self;
+            for (queries) |*q| {
+                if (q.resolved) continue;
+                const seg = path.segmentAtDepth(q.path, path_depth) orelse {
+                    q.resolved = true;
+                    remaining.* -= 1;
+                    continue;
+                };
+                if (!seg.is_index) {
+                    q.resolved = true;
+                    remaining.* -= 1;
+                    continue;
+                }
+                if (seg.index >= ta.count) {
+                    q.resolved = true;
+                    remaining.* -= 1;
+                    continue;
+                }
+                if (seg.rest.len != 0) {
+                    q.resolved = true;
+                    remaining.* -= 1;
+                    continue;
+                }
+
+                q.value = typedArrayElementToValue(ta, seg.index);
+                q.resolved = true;
+                remaining.* -= 1;
+            }
+        }
+
+        fn typedArrayElementToValue(ta: common.TypedArray, index: usize) common.Value {
+            const elem_size = common.typedArrayElemSize(ta.elem);
+            const off = index * elem_size;
+            const chunk = ta.bytes[off..][0..elem_size];
+
+	            return switch (ta.elem) {
+	                .u8 => .{ .u8 = chunk[0] },
+	                .i8 => .{ .i8 = @bitCast(chunk[0]) },
+	                .u16 => .{ .u16 = std.mem.readInt(u16, chunk[0..2], .little) },
+	                .i16 => .{ .i16 = std.mem.readInt(i16, chunk[0..2], .little) },
+	                .u32 => .{ .u32 = std.mem.readInt(u32, chunk[0..4], .little) },
+	                .i32 => .{ .i32 = std.mem.readInt(i32, chunk[0..4], .little) },
+	                .u64 => .{ .u64 = std.mem.readInt(u64, chunk[0..8], .little) },
+	                .i64 => .{ .i64 = std.mem.readInt(i64, chunk[0..8], .little) },
+	                .f32 => .{ .f32 = @bitCast(std.mem.readInt(u32, chunk[0..4], .little)) },
+	                .f64 => .{ .f64 = @bitCast(std.mem.readInt(u64, chunk[0..8], .little)) },
+	                .f16 => .{ .f16 = @bitCast(std.mem.readInt(u16, chunk[0..2], .little)) },
+	            };
+	        }
 
         /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
         /// Returns null if the path doesn't exist or points to an incompatible type.

@@ -206,6 +206,162 @@ test "writer/fixed: small tags are used" {
     }
 }
 
+test "writer/reader: typedArray roundtrip and skipping" {
+    // f32 typedArray
+    {
+        const vals = [_]f32{ 1.25, -2.5, 3.0, 0.0 };
+
+        var buffer: [128]u8 = undefined;
+        var fixed = Io.Writer.fixed(&buffer);
+        var writer = Writer.init(&fixed);
+
+        try writer.writeTypedArray(vals[0..]);
+        try writer.writeAny(true);
+
+        const written = fixed.buffered();
+
+        // Verify header: tag + subtype + count(1 byte)
+        const decoded = Common.decodeTag(written[0]);
+        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.typedArray))), decoded.tag);
+        try std.testing.expectEqual(@as(u3, 0), decoded.data); // count fits in 1 byte
+
+        var reader = Reader(.{}).init(written);
+        const ta_val = try reader.read();
+        try std.testing.expect(ta_val == .typedArray);
+        try std.testing.expectEqual(bufzilla.Common.TypedArrayElem.f32, ta_val.typedArray.elem);
+        try std.testing.expectEqual(@as(usize, vals.len), ta_val.typedArray.count);
+        try std.testing.expectEqual(@as(usize, vals.len * 4), ta_val.typedArray.bytes.len);
+
+        var i: usize = 0;
+        while (i < vals.len) : (i += 1) {
+            const off = i * 4;
+            const bits = std.mem.readInt(u32, ta_val.typedArray.bytes[off..][0..4], .little);
+            const f: f32 = @bitCast(bits);
+            try std.testing.expectEqual(vals[i], f);
+        }
+
+        var reader2 = Reader(.{}).init(written);
+        try reader2.skipValue();
+        try std.testing.expectEqual(true, (try reader2.read()).bool);
+    }
+
+    // u16 typedArray (smoke test)
+    {
+        const vals = [_]u16{ 0x3f80, 0xc000, 0x3f00 };
+
+        var buffer: [128]u8 = undefined;
+        var fixed = Io.Writer.fixed(&buffer);
+        var writer = Writer.init(&fixed);
+
+        try writer.writeTypedArray(vals[0..]);
+
+        var reader = Reader(.{}).init(fixed.buffered());
+        const ta_val = try reader.read();
+        try std.testing.expect(ta_val == .typedArray);
+        try std.testing.expectEqual(bufzilla.Common.TypedArrayElem.u16, ta_val.typedArray.elem);
+        try std.testing.expectEqual(@as(usize, vals.len), ta_val.typedArray.count);
+
+        var i: usize = 0;
+        while (i < vals.len) : (i += 1) {
+            const off = i * 2;
+            const bits = std.mem.readInt(u16, ta_val.typedArray.bytes[off..][0..2], .little);
+            try std.testing.expectEqual(vals[i], bits);
+        }
+    }
+}
+
+test "reader: typedArray invalid subtype" {
+    const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
+    const buf = &[_]u8{ tag, 0xFF }; // invalid subtype, missing count/payload is fine
+    var reader = Reader(.{}).init(buf);
+    try std.testing.expectError(error.InvalidEnumTag, reader.read());
+}
+
+test "reader: typedArray truncated payload errors" {
+    const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
+    const subtype: u8 = @intFromEnum(Common.TypedArrayElem.f32);
+    const count: u8 = 2; // expects 8 payload bytes
+    const buf = &[_]u8{ tag, subtype, count, 0, 0, 0, 0 }; // only 4 payload bytes present
+    var reader = Reader(.{}).init(buf);
+    try std.testing.expectError(error.UnexpectedEof, reader.read());
+}
+
+test "reader: typedArray respects max_bytes_length" {
+    const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
+    const subtype: u8 = @intFromEnum(Common.TypedArrayElem.u32);
+    const count: u8 = 3; // payload is 12 bytes
+    const payload = [_]u8{0} ** 12;
+    var buf: [1 + 1 + 1 + 12]u8 = undefined;
+    buf[0] = tag;
+    buf[1] = subtype;
+    buf[2] = count;
+    @memcpy(buf[3..], &payload);
+
+    var reader = Reader(.{ .max_bytes_length = 8 }).init(&buf);
+    try std.testing.expectError(error.BytesTooLong, reader.read());
+}
+
+test "readPaths: typedArray indexing" {
+    const vec = [_]f32{ 1.25, -2.5, 3.0, 0.0 };
+    const u16s = [_]u16{ 10, 20, 30 };
+
+    var enc_buffer: [512]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+
+    try writer.startObject();
+    try writer.writeAny("vec");
+    try writer.writeTypedArray(vec[0..]);
+    try writer.writeAny("arr");
+    try writer.startArray();
+    try writer.writeTypedArray(u16s[0..]);
+    try writer.endContainer();
+    try writer.endContainer(); // end object
+
+    var reader = Reader(.{}).init(enc_fixed.buffered());
+    var queries = [_]bufzilla.PathQuery{
+        .{ .path = "vec[0]" },
+        .{ .path = "vec[1]" },
+        .{ .path = "vec[99]" }, // out of bounds
+        .{ .path = "vec[0].x" }, // cannot descend
+        .{ .path = "arr[0][1]" },
+    };
+
+    try reader.readPaths(queries[0..]);
+
+    try std.testing.expect(queries[0].value != null and queries[0].value.? == .f32);
+    try std.testing.expectEqual(@as(f32, 1.25), queries[0].value.?.f32);
+
+    try std.testing.expect(queries[1].value != null and queries[1].value.? == .f32);
+    try std.testing.expectEqual(@as(f32, -2.5), queries[1].value.?.f32);
+
+    try std.testing.expect(queries[2].value == null);
+    try std.testing.expect(queries[3].value == null);
+
+    try std.testing.expect(queries[4].value != null and queries[4].value.? == .u16);
+    try std.testing.expectEqual(@as(u16, 20), queries[4].value.?.u16);
+}
+
+test "Common.typedArrayAsSlice decodes into caller buffer" {
+    const vec = [_]f32{ 1.25, -2.5, 3.0, 0.0 };
+    var buffer: [128]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+
+    try writer.writeTypedArray(vec[0..]);
+    var reader = Reader(.{}).init(fixed.buffered());
+    const v = try reader.read();
+    try std.testing.expect(v == .typedArray);
+
+    var out: [vec.len]f32 = undefined;
+    const slice = try Common.typedArrayAsSlice(f32, v.typedArray, out[0..]);
+    try std.testing.expectEqual(@as(usize, vec.len), slice.len);
+    try std.testing.expectEqual(vec[0], slice[0]);
+    try std.testing.expectEqual(vec[1], slice[1]);
+    try std.testing.expectEqual(vec[2], slice[2]);
+    try std.testing.expectEqual(vec[3], slice[3]);
+}
+
 test "writer/fixed: empty containers" {
     var buffer: [32]u8 = undefined;
     var fixed = Io.Writer.fixed(&buffer);
@@ -338,6 +494,46 @@ test "writer/applyUpdates: leaf, nested, and upsert" {
     const arr2 = (try reader.readPath("arr[2]")).?;
     try std.testing.expect(arr2 == .null);
     try std.testing.expectEqual(33, (try reader.readPath("arr[3]")).?.i64);
+}
+
+test "writer/applyUpdates: typedArray element updates" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+
+    const vec = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const u16_arr = [_]u16{ 10, 20, 30 };
+
+    try writer.startObject();
+    try writer.writeAny("vec");
+    try writer.writeTypedArray(vec[0..]);
+    try writer.writeAny("u16s");
+    try writer.writeTypedArray(u16_arr[0..]);
+    try writer.endContainer();
+
+    const encoded = aw.written();
+
+    var new_vec2: f32 = 9.5;
+    var new_u16_1: u16 = 0x1234;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("vec[2]", &new_vec2),
+        Writer.Update.init("u16s[1]", &new_u16_1),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+    try out_writer.applyUpdates(encoded, updates[0..]);
+
+    var reader = Reader(.{}).init(out_aw.written());
+    const v2 = (try reader.readPath("vec[2]")).?;
+    try std.testing.expect(v2 == .f32);
+    try std.testing.expectEqual(@as(f32, 9.5), v2.f32);
+
+    const u16_1 = (try reader.readPath("u16s[1]")).?;
+    try std.testing.expect(u16_1 == .u16);
+    try std.testing.expectEqual(@as(u16, 0x1234), u16_1.u16);
 }
 
 test "writer/applyUpdates: conflicting leaf and child updates" {

@@ -4,6 +4,7 @@ const common = @import("common.zig");
 const updates_mod = @import("updates.zig");
 const reader_mod = @import("Reader.zig");
 const Io = std.Io;
+const builtin = @import("builtin");
 
 const Writer = @This();
 
@@ -102,6 +103,18 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try w.writeByte(tag_byte);
             try w.writeAll(data.smallBytes);
         },
+        .typedArray => {
+            const ta = data.typedArray;
+            const elem_size = common.typedArrayElemSize(ta.elem);
+            const expected_len = std.math.mul(usize, ta.count, elem_size) catch @panic("bufzilla: typedArray payload length overflow");
+            std.debug.assert(expected_len == ta.bytes.len);
+            const count_varint = common.encodeVarInt(@intCast(ta.count));
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), count_varint.size);
+            try w.writeByte(tag_byte);
+            try w.writeByte(@intFromEnum(ta.elem));
+            try w.writeAll(count_varint.bytes[0 .. @as(usize, count_varint.size) + 1]);
+            try w.writeAll(ta.bytes);
+        },
         .bool => {
             const val = @intFromBool(data.bool);
             try w.writeByte(common.encodeTag(@intFromEnum(data), val));
@@ -120,6 +133,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
                 .i8 => try w.writeInt(i8, data.i8, .little),
                 .f64 => try w.writeInt(u64, @bitCast(data.f64), .little),
                 .f32 => try w.writeInt(u32, @bitCast(data.f32), .little),
+                .f16 => try w.writeInt(u16, @bitCast(data.f16), .little),
                 .object, .array, .containerEnd, .null => {},
                 .bytes => {
                     try w.writeInt(u64, data.bytes.len, .little);
@@ -128,6 +142,69 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
                 else => unreachable,
             }
         },
+    }
+}
+
+pub fn writeTypedArray(self: *Writer, values: anytype) Error!void {
+    const ValuesT = @TypeOf(values);
+    switch (@typeInfo(ValuesT)) {
+        .pointer => |p| switch (p.size) {
+            .slice => try writeTypedArraySlice(self, p.child, values),
+            .one => switch (@typeInfo(p.child)) {
+                .array => |arr| {
+                    const slice: []const arr.child = values;
+                    try writeTypedArraySlice(self, arr.child, slice);
+                },
+                else => @compileError("bufzilla: writeTypedArray expects a slice or pointer to array, got: " ++ @typeName(ValuesT)),
+            },
+            else => @compileError("bufzilla: writeTypedArray expects a slice or pointer to array, got: " ++ @typeName(ValuesT)),
+        },
+        .array => |arr| {
+            const ptr: *const [arr.len]arr.child = &values;
+            const slice: []const arr.child = ptr;
+            try writeTypedArraySlice(self, arr.child, slice);
+        },
+        else => @compileError("bufzilla: writeTypedArray expects a slice or array, got: " ++ @typeName(ValuesT)),
+    }
+}
+
+fn writeTypedArraySlice(self: *Writer, comptime ElemT: type, slice: []const ElemT) Error!void {
+    const elem: common.TypedArrayElem = comptime blk: {
+        const maybe = common.typedArrayElemFromType(ElemT);
+        if (maybe == null) @compileError("bufzilla: writeTypedArray unsupported element type: " ++ @typeName(ElemT));
+        break :blk maybe.?;
+    };
+    try writeTypedArraySliceWithElem(self, ElemT, elem, slice);
+}
+
+fn writeTypedArraySliceWithElem(self: *Writer, comptime ElemT: type, comptime elem: common.TypedArrayElem, slice: []const ElemT) Error!void {
+    const count: usize = slice.len;
+    const count_varint = common.encodeVarInt(@intCast(count));
+    const tag_byte: u8 = common.encodeTag(@intFromEnum(common.Value.typedArray), count_varint.size);
+
+    try self.raw.writeByte(tag_byte);
+    try self.raw.writeByte(@intFromEnum(elem));
+    try self.raw.writeAll(count_varint.bytes[0 .. @as(usize, count_varint.size) + 1]);
+
+    if (count == 0) return;
+
+    if (builtin.cpu.arch.endian() == .little) {
+        try self.raw.writeAll(std.mem.sliceAsBytes(slice));
+        return;
+    }
+
+    switch (elem) {
+        .u8 => for (slice) |v| try self.raw.writeInt(u8, v, .little),
+        .i8 => for (slice) |v| try self.raw.writeInt(i8, v, .little),
+        .u16 => for (slice) |v| try self.raw.writeInt(u16, v, .little),
+        .i16 => for (slice) |v| try self.raw.writeInt(i16, v, .little),
+        .u32 => for (slice) |v| try self.raw.writeInt(u32, v, .little),
+        .i32 => for (slice) |v| try self.raw.writeInt(i32, v, .little),
+        .u64 => for (slice) |v| try self.raw.writeInt(u64, v, .little),
+        .i64 => for (slice) |v| try self.raw.writeInt(i64, v, .little),
+        .f16 => for (slice) |v| try self.raw.writeInt(u16, @bitCast(v), .little),
+        .f32 => for (slice) |v| try self.raw.writeInt(u32, @bitCast(v), .little),
+        .f64 => for (slice) |v| try self.raw.writeInt(u64, @bitCast(v), .little),
     }
 }
 
@@ -167,6 +244,7 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .float => switch (T) {
             f64 => try self.write(common.Value{ .f64 = data }, .f64),
             f32 => try self.write(common.Value{ .f32 = data }, .f32),
+            f16 => try self.write(common.Value{ .f16 = data }, .f16),
             else => @compileError("bufzilla: unsupported float type: " ++ @typeName(T)),
         },
         .optional => {

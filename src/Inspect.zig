@@ -106,6 +106,58 @@ pub fn Inspect(comptime limits: ReadLimits) type {
                     try self.writeIndent(depth);
                     try w.writeByte(']');
                 },
+                .typedArray => {
+                    const ta = val.typedArray;
+                    const elem_size = common.typedArrayElemSize(ta.elem);
+                    const expected_len = std.math.mul(usize, ta.count, elem_size) catch return error.InvalidEnumTag;
+                    if (expected_len != ta.bytes.len) return error.InvalidEnumTag;
+
+                    try w.writeAll("[\n");
+
+                    var i: usize = 0;
+                    while (i < ta.count) : (i += 1) {
+                        if (i > 0) try w.writeAll(",\n");
+                        try self.writeIndent(depth + 1);
+
+                        const off = i * elem_size;
+                        const chunk = ta.bytes[off..][0..elem_size];
+
+	                        switch (ta.elem) {
+	                            .u8 => try w.print("{d}", .{chunk[0]}),
+	                            .i8 => try w.print("{d}", .{@as(i8, @bitCast(chunk[0]))}),
+	                            .u16 => try w.print("{d}", .{std.mem.readInt(u16, chunk[0..2], .little)}),
+	                            .i16 => try w.print("{d}", .{std.mem.readInt(i16, chunk[0..2], .little)}),
+	                            .u32 => try w.print("{d}", .{std.mem.readInt(u32, chunk[0..4], .little)}),
+	                            .i32 => try w.print("{d}", .{std.mem.readInt(i32, chunk[0..4], .little)}),
+	                            .u64 => try w.print("{d}", .{std.mem.readInt(u64, chunk[0..8], .little)}),
+	                            .i64 => try w.print("{d}", .{std.mem.readInt(i64, chunk[0..8], .little)}),
+	                            .f16 => {
+	                                const bits = std.mem.readInt(u16, chunk[0..2], .little);
+	                                const fv: f16 = @bitCast(bits);
+	                                const f: f64 = @floatCast(fv);
+	                                if (!std.math.isFinite(f)) return error.NonFiniteFloat;
+	                                try w.printFloat(f, .{ .precision = self.options.float_precision, .mode = .decimal });
+	                            },
+	                            .f32 => {
+	                                const bits = std.mem.readInt(u32, chunk[0..4], .little);
+	                                const fv: f32 = @bitCast(bits);
+	                                const f: f64 = @floatCast(fv);
+	                                if (!std.math.isFinite(f)) return error.NonFiniteFloat;
+                                try w.printFloat(f, .{ .precision = self.options.float_precision, .mode = .decimal });
+                            },
+                            .f64 => {
+                                const bits = std.mem.readInt(u64, chunk[0..8], .little);
+                                const f: f64 = @bitCast(bits);
+                                if (!std.math.isFinite(f)) return error.NonFiniteFloat;
+                                try w.printFloat(f, .{ .precision = self.options.float_precision, .mode = .decimal });
+                            },
+                        }
+                    }
+
+                    if (ta.count > 0) try w.writeByte('\n');
+                    try self.writeIndent(depth);
+                    try w.writeByte(']');
+                },
                 .f64 => {
                     if (!std.math.isFinite(val.f64)) return error.NonFiniteFloat;
                     try w.printFloat(val.f64, .{ .precision = self.options.float_precision, .mode = .decimal });
@@ -113,6 +165,11 @@ pub fn Inspect(comptime limits: ReadLimits) type {
                 .f32 => {
                     if (!std.math.isFinite(val.f32)) return error.NonFiniteFloat;
                     try w.printFloat(val.f32, .{ .precision = self.options.float_precision, .mode = .decimal });
+                },
+                .f16 => {
+                    const f: f64 = @floatCast(val.f16);
+                    if (!std.math.isFinite(f)) return error.NonFiniteFloat;
+                    try w.printFloat(f, .{ .precision = self.options.float_precision, .mode = .decimal });
                 },
                 .i64 => try w.print("{d}", .{val.i64}),
                 .i32 => try w.print("{d}", .{val.i32}),
