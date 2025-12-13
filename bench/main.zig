@@ -6,6 +6,7 @@ const Io = std.Io;
 const Writer = bufzilla.Writer;
 const Reader = bufzilla.Reader;
 const Value = bufzilla.Value;
+const Common = bufzilla.Common;
 
 /// Benchmark timer helper
 /// Run a benchmark and print results
@@ -382,6 +383,95 @@ fn benchMediumArrayRead() !void {
     var reader = Reader(.{}).init(State.buffer[0..State.len]);
     const array = try reader.read();
     while (try reader.iterateArray(array)) |_| {}
+}
+
+// ============================================================================
+// Typed Array Benchmarks
+// ============================================================================
+
+fn benchTypedArrayF32Write() !void {
+    var arr: [4096]u8 = undefined;
+    var fixed = Io.Writer.fixed(&arr);
+    var writer = Writer.init(&fixed);
+
+    const vec = [_]f32{1.0} ** 768;
+    try writer.writeTypedArray(&vec);
+}
+
+fn benchTypedArrayF32Read() !void {
+    const BufferLen = 4096;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        const vec = [_]f32{1.0} ** 768;
+        try writer.writeTypedArray(&vec);
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.read();
+}
+
+fn benchTypedArrayF32Skip() !void {
+    const BufferLen = 4096;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        const vec = [_]f32{1.0} ** 768;
+        try writer.writeTypedArray(&vec);
+        try writer.writeAny(true);
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    try reader.skipValue();
+    _ = try reader.read();
+}
+
+fn benchTypedArrayU16Write() !void {
+    var arr: [2048]u8 = undefined;
+    var fixed = Io.Writer.fixed(&arr);
+    var writer = Writer.init(&fixed);
+
+    const elem: u16 = 0x3f80;
+    const vec = [_]u16{elem} ** 768;
+    try writer.writeTypedArray(&vec);
+}
+
+fn benchTypedArrayU16Read() !void {
+    const BufferLen = 2048;
+    const State = struct {
+        var initialized = false;
+        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var len: usize = 0;
+    };
+
+    if (!State.initialized) {
+        var fixed = Io.Writer.fixed(&State.buffer);
+        var writer = Writer.init(&fixed);
+        const elem: u16 = 0x3f80;
+        const vec = [_]u16{elem} ** 768;
+        try writer.writeTypedArray(&vec);
+        State.len = fixed.buffered().len;
+        State.initialized = true;
+    }
+
+    var reader = Reader(.{}).init(State.buffer[0..State.len]);
+    _ = try reader.read();
 }
 
 // ============================================================================
@@ -1093,6 +1183,16 @@ pub fn main() !void {
     try benchmark("Small Array Read (10 elements)", 100000, benchSmallArrayRead);
     try benchmark("Medium Array Write (100 elements)", 50000, benchMediumArrayWrite);
     try benchmark("Medium Array Read (100 elements)", 50000, benchMediumArrayRead);
+    std.debug.print("\n", .{});
+
+    // Typed Arrays
+    std.debug.print("Typed Arrays:\n", .{});
+    std.debug.print("-" ** 80 ++ "\n", .{});
+    try benchmark("TypedArray f32 Write (768 elems)", 50000, benchTypedArrayF32Write);
+    try benchmark("TypedArray f32 Read (header)", 200000, benchTypedArrayF32Read);
+    try benchmark("TypedArray f32 Skip (768 elems)", 200000, benchTypedArrayF32Skip);
+    try benchmark("TypedArray u16 Write (768 elems)", 50000, benchTypedArrayU16Write);
+    try benchmark("TypedArray u16 Read (header)", 200000, benchTypedArrayU16Read);
     std.debug.print("\n", .{});
 
     // Objects (Maps)

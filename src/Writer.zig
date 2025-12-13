@@ -4,6 +4,7 @@ const common = @import("common.zig");
 const updates_mod = @import("updates.zig");
 const reader_mod = @import("Reader.zig");
 const Io = std.Io;
+const builtin = @import("builtin");
 
 const Writer = @This();
 
@@ -57,14 +58,39 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
     const w = self.raw;
 
     switch (comptime tag) {
+        .smallIntPositive => {
+            std.debug.assert(data.smallIntPositive <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntPositive));
+            try w.writeByte(tag_byte);
+        },
+        .smallIntNegative => {
+            std.debug.assert(data.smallIntNegative > 0 and data.smallIntNegative <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntNegative));
+            try w.writeByte(tag_byte);
+        },
+        .smallUint => {
+            std.debug.assert(data.smallUint <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallUint));
+            try w.writeByte(tag_byte);
+        },
         .varIntUnsigned => {
             const varint = common.encodeVarInt(data.varIntUnsigned);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try w.writeByte(tag_byte);
             try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
         },
-        .varIntSigned => {
-            const varint = common.encodeVarInt(common.encodeZigZag(data.varIntSigned));
+        .varIntSignedPositive => {
+            const magnitude: u64 = @intCast(data.varIntSignedPositive);
+            const varint = common.encodeVarInt(magnitude);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
+            try w.writeByte(tag_byte);
+            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+        },
+        .varIntSignedNegative => {
+            const signed = data.varIntSignedNegative;
+            std.debug.assert(signed < 0);
+            const magnitude: u64 = if (signed == std.math.minInt(i64)) (@as(u64, 1) << 63) else @intCast(-signed);
+            const varint = common.encodeVarInt(magnitude);
             const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
             try w.writeByte(tag_byte);
             try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
@@ -75,6 +101,24 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             try w.writeByte(tag_byte);
             try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
             try w.writeAll(data.varIntBytes);
+        },
+        .smallBytes => {
+            std.debug.assert(data.smallBytes.len <= 7);
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallBytes.len));
+            try w.writeByte(tag_byte);
+            try w.writeAll(data.smallBytes);
+        },
+        .typedArray => {
+            const ta = data.typedArray;
+            const elem_size = common.typedArrayElemSize(ta.elem);
+            const expected_len = std.math.mul(usize, ta.count, elem_size) catch @panic("bufzilla: typedArray payload length overflow");
+            std.debug.assert(expected_len == ta.bytes.len);
+            const count_varint = common.encodeVarInt(@intCast(ta.count));
+            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), count_varint.size);
+            try w.writeByte(tag_byte);
+            try w.writeByte(@intFromEnum(ta.elem));
+            try w.writeAll(count_varint.bytes[0 .. @as(usize, count_varint.size) + 1]);
+            try w.writeAll(ta.bytes);
         },
         .bool => {
             const val = @intFromBool(data.bool);
@@ -94,6 +138,7 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
                 .i8 => try w.writeInt(i8, data.i8, .little),
                 .f64 => try w.writeInt(u64, @bitCast(data.f64), .little),
                 .f32 => try w.writeInt(u32, @bitCast(data.f32), .little),
+                .f16 => try w.writeInt(u16, @bitCast(data.f16), .little),
                 .object, .array, .containerEnd, .null => {},
                 .bytes => {
                     try w.writeInt(u64, data.bytes.len, .little);
@@ -102,6 +147,69 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
                 else => unreachable,
             }
         },
+    }
+}
+
+pub fn writeTypedArray(self: *Writer, values: anytype) Error!void {
+    const ValuesT = @TypeOf(values);
+    switch (@typeInfo(ValuesT)) {
+        .pointer => |p| switch (p.size) {
+            .slice => try writeTypedArraySlice(self, p.child, values),
+            .one => switch (@typeInfo(p.child)) {
+                .array => |arr| {
+                    const slice: []const arr.child = values;
+                    try writeTypedArraySlice(self, arr.child, slice);
+                },
+                else => @compileError("bufzilla: writeTypedArray expects a slice or pointer to array, got: " ++ @typeName(ValuesT)),
+            },
+            else => @compileError("bufzilla: writeTypedArray expects a slice or pointer to array, got: " ++ @typeName(ValuesT)),
+        },
+        .array => |arr| {
+            const ptr: *const [arr.len]arr.child = &values;
+            const slice: []const arr.child = ptr;
+            try writeTypedArraySlice(self, arr.child, slice);
+        },
+        else => @compileError("bufzilla: writeTypedArray expects a slice or array, got: " ++ @typeName(ValuesT)),
+    }
+}
+
+fn writeTypedArraySlice(self: *Writer, comptime ElemT: type, slice: []const ElemT) Error!void {
+    const elem: common.TypedArrayElem = comptime blk: {
+        const maybe = common.typedArrayElemFromType(ElemT);
+        if (maybe == null) @compileError("bufzilla: writeTypedArray unsupported element type: " ++ @typeName(ElemT));
+        break :blk maybe.?;
+    };
+    try writeTypedArraySliceWithElem(self, ElemT, elem, slice);
+}
+
+fn writeTypedArraySliceWithElem(self: *Writer, comptime ElemT: type, comptime elem: common.TypedArrayElem, slice: []const ElemT) Error!void {
+    const count: usize = slice.len;
+    const count_varint = common.encodeVarInt(@intCast(count));
+    const tag_byte: u8 = common.encodeTag(@intFromEnum(common.Value.typedArray), count_varint.size);
+
+    try self.raw.writeByte(tag_byte);
+    try self.raw.writeByte(@intFromEnum(elem));
+    try self.raw.writeAll(count_varint.bytes[0 .. @as(usize, count_varint.size) + 1]);
+
+    if (count == 0) return;
+
+    if (builtin.cpu.arch.endian() == .little) {
+        try self.raw.writeAll(std.mem.sliceAsBytes(slice));
+        return;
+    }
+
+    switch (elem) {
+        .u8 => for (slice) |v| try self.raw.writeInt(u8, v, .little),
+        .i8 => for (slice) |v| try self.raw.writeInt(i8, v, .little),
+        .u16 => for (slice) |v| try self.raw.writeInt(u16, v, .little),
+        .i16 => for (slice) |v| try self.raw.writeInt(i16, v, .little),
+        .u32 => for (slice) |v| try self.raw.writeInt(u32, v, .little),
+        .i32 => for (slice) |v| try self.raw.writeInt(i32, v, .little),
+        .u64 => for (slice) |v| try self.raw.writeInt(u64, v, .little),
+        .i64 => for (slice) |v| try self.raw.writeInt(i64, v, .little),
+        .f16 => for (slice) |v| try self.raw.writeInt(u16, @bitCast(v), .little),
+        .f32 => for (slice) |v| try self.raw.writeInt(u32, @bitCast(v), .little),
+        .f64 => for (slice) |v| try self.raw.writeInt(u64, @bitCast(v), .little),
     }
 }
 
@@ -118,19 +226,36 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .comptime_int => try self.writeAnyExplicit(i64, @intCast(data)),
         .comptime_float => try self.writeAnyExplicit(f64, @floatCast(data)),
         .int => switch (T) {
-            u64 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            u32 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            u16 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            u8 => try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned),
-            i64 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
-            i32 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
-            i16 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
-            i8 => try self.write(common.Value{ .varIntSigned = data }, .varIntSigned),
+            u64 => {
+                if (data <= 7) {
+                    try self.write(common.Value{ .smallUint = @intCast(data) }, .smallUint);
+                } else {
+                    try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned);
+                }
+            },
+            u32 => try self.writeAnyExplicit(u64, data),
+            u16 => try self.writeAnyExplicit(u64, data),
+            u8 => try self.writeAnyExplicit(u64, data),
+            i64 => {
+                if (data >= 0 and data <= 7) {
+                    try self.write(common.Value{ .smallIntPositive = @intCast(data) }, .smallIntPositive);
+                } else if (data < 0 and data >= -7) {
+                    try self.write(common.Value{ .smallIntNegative = @intCast(-data) }, .smallIntNegative);
+                } else if (data >= 0) {
+                    try self.write(common.Value{ .varIntSignedPositive = data }, .varIntSignedPositive);
+                } else {
+                    try self.write(common.Value{ .varIntSignedNegative = data }, .varIntSignedNegative);
+                }
+            },
+            i32 => try self.writeAnyExplicit(i64, data),
+            i16 => try self.writeAnyExplicit(i64, data),
+            i8 => try self.writeAnyExplicit(i64, data),
             else => @compileError("bufzilla: unsupported integer type: " ++ @typeName(T)),
         },
         .float => switch (T) {
             f64 => try self.write(common.Value{ .f64 = data }, .f64),
             f32 => try self.write(common.Value{ .f32 = data }, .f32),
+            f16 => try self.write(common.Value{ .f16 = data }, .f16),
             else => @compileError("bufzilla: unsupported float type: " ++ @typeName(T)),
         },
         .optional => {
@@ -145,7 +270,11 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .pointer => |ptr_info| {
             if (ptr_info.size == .slice and ptr_info.child == u8) {
                 // u8 slice (string)
-                try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                if (data.len <= 7) {
+                    try self.write(common.Value{ .smallBytes = data }, .smallBytes);
+                } else {
+                    try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                }
             } else if (ptr_info.size == .slice) {
                 // slice of any supported type
                 try self.startArray();
@@ -159,7 +288,12 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
                     .array => |arr| {
                         if (arr.child == u8) {
                             // pointer to byte array - write as bytes
-                            try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
+                            const slice: []const u8 = data;
+                            if (slice.len <= 7) {
+                                try self.write(common.Value{ .smallBytes = slice }, .smallBytes);
+                            } else {
+                                try self.write(common.Value{ .varIntBytes = slice }, .varIntBytes);
+                            }
                         } else {
                             // pointer to array of other types - write as array
                             try self.startArray();
@@ -183,19 +317,29 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
             inline for (struct_info.fields) |field| {
                 // Precompute encoded key prefix
                 const key_prefix = comptime blk: {
-                    const varint = common.encodeVarInt(field.name.len);
-                    const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
-                    const len_size: usize = @as(usize, varint.size) + 1;
-                    var prefix: [1 + 8 + field.name.len]u8 = undefined;
-                    prefix[0] = tag_byte;
-                    for (0..len_size) |i| {
-                        prefix[1 + i] = varint.bytes[i];
+                    if (field.name.len <= 7) {
+                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.smallBytes), @truncate(field.name.len));
+                        var prefix: [1 + field.name.len]u8 = undefined;
+                        prefix[0] = tag_byte;
+                        for (0..field.name.len) |i| {
+                            prefix[1 + i] = field.name[i];
+                        }
+                        break :blk prefix[0 .. 1 + field.name.len].*;
+                    } else {
+                        const varint = common.encodeVarInt(field.name.len);
+                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
+                        const len_size: usize = @as(usize, varint.size) + 1;
+                        var prefix: [1 + 8 + field.name.len]u8 = undefined;
+                        prefix[0] = tag_byte;
+                        for (0..len_size) |i| {
+                            prefix[1 + i] = varint.bytes[i];
+                        }
+                        // Include the field name in the prefix
+                        for (0..field.name.len) |i| {
+                            prefix[1 + len_size + i] = field.name[i];
+                        }
+                        break :blk prefix[0 .. 1 + len_size + field.name.len].*;
                     }
-                    // Include the field name in the prefix
-                    for (0..field.name.len) |i| {
-                        prefix[1 + len_size + i] = field.name[i];
-                    }
-                    break :blk prefix[0 .. 1 + len_size + field.name.len].*;
                 };
                 try self.raw.writeAll(&key_prefix);
                 const val = @field(data, field.name);
