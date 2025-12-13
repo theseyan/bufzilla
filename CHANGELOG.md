@@ -11,6 +11,7 @@
 
 ### Safety
 - Fix `Reader.readPath` / `Reader.readPaths` object size limit enforcement when encountering non-byte keys.
+- Refactor code to reduce duplication.
 
 # v0.3.1
 
