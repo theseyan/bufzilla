@@ -357,7 +357,7 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .vector => |vector_info| {
             try self.startArray();
             var i: usize = 0;
-            inline while (i < vector_info.len) : (i += 1) {
+            while (i < vector_info.len) : (i += 1) {
                 try self.writeAnyExplicit(@TypeOf(data[i]), data[i]);
             }
             try self.endContainer();
