@@ -1,6 +1,9 @@
+const std = @import("std");
+
 pub const Writer = @import("Writer.zig");
 pub const Update = Writer.Update;
-pub const ApplyUpdatesError = @import("updates.zig").Error;
+const updates = @import("updates.zig");
+pub const ApplyUpdatesError = updates.Error;
 
 const reader_mod = @import("Reader.zig");
 pub const Reader = reader_mod.Reader;
@@ -16,3 +19,12 @@ pub const InspectError = inspect_mod.Error;
 
 pub const Common = @import("common.zig");
 pub const Value = Common.Value;
+
+test {
+    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(Writer);
+    std.testing.refAllDecls(updates);
+    std.testing.refAllDecls(reader_mod);
+    std.testing.refAllDecls(inspect_mod);
+    std.testing.refAllDecls(Common);
+}

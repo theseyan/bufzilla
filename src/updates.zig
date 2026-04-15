@@ -22,7 +22,7 @@ const ReadError = reader_mod.Error;
 fn peekTagType(reader: anytype, buf: []const u8) ReadError!std.meta.Tag(common.Value) {
     if (reader.pos >= buf.len) return ReadError.UnexpectedEof;
     const decoded = common.decodeTag(buf[reader.pos]);
-    return std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+    return std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse error.InvalidEnumTag;
 }
 
 fn decodeUpdateValue(comptime WriterT: type, upd: anytype) (WriterT.Error || ReadError)!common.Value {

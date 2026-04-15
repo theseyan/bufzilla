@@ -15,7 +15,9 @@ var shared_encoded: [1024]u8 = undefined;
 var shared_encoded_len: usize = 0;
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(bufzilla);
+    std.testing.refAllDecls(encodingTests);
 }
 
 // =============================================================================
@@ -1039,7 +1041,8 @@ test "writer/reader: smallUint encodes 0..7" {
     try std.testing.expectEqual(@as(usize, 1), written.len);
 
     const decoded = Common.decodeTag(written[0]);
-    const tag = try std.meta.intToEnum(std.meta.Tag(Value), decoded.tag);
+    const tag = std.enums.fromInt(std.meta.Tag(Value), decoded.tag) orelse
+        return error.InvalidEnumTag;
     try std.testing.expectEqual(std.meta.Tag(Value).smallUint, tag);
     try std.testing.expectEqual(@as(u3, 7), decoded.data);
 

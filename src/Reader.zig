@@ -97,7 +97,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             // Decode the tag
             const decoded_tag = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded_tag.tag);
+            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded_tag.tag) orelse
+                return error.InvalidEnumTag;
 
             switch (val_type) {
                 .containerEnd => {
@@ -258,7 +259,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
             const tag_byte = self.bytes[self.pos];
             const decoded = common.decodeTag(tag_byte);
-            const tag = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const tag = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse
+                return error.InvalidEnumTag;
             return .{ .tag = tag, .data = decoded.data };
         }
 
@@ -296,7 +298,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
             const elem_byte = self.bytes[self.pos];
             self.pos += 1;
-            const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
+            const elem = std.enums.fromInt(common.TypedArrayElem, elem_byte) orelse return error.InvalidEnumTag;
 
             const count_len: usize = @as(usize, tag_data) + 1;
             if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
@@ -369,7 +371,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
             self.pos += 1;
 
             const decoded = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse
+                return error.InvalidEnumTag;
 
             switch (val_type) {
                 .array, .object => {
@@ -385,7 +388,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
                         self.pos += 1;
 
                         const inner_decoded = common.decodeTag(inner_tag);
-                        const inner_type = try std.meta.intToEnum(std.meta.Tag(common.Value), inner_decoded.tag);
+                        const inner_type = std.enums.fromInt(std.meta.Tag(common.Value), inner_decoded.tag) orelse
+                            return error.InvalidEnumTag;
 
                         const ev = try skipOneValue(self, inner_decoded, inner_type);
                         switch (ev) {
@@ -414,7 +418,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
             self.pos += 1;
 
             const decoded = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse
+                return error.InvalidEnumTag;
 
             if (val_type != .varIntBytes and val_type != .bytes and val_type != .smallBytes) {
                 return error.InvalidEnumTag;
@@ -532,11 +537,11 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             const root_peek = try self.peekTag();
 
-                if (root_peek.tag != .object and root_peek.tag != .array) {
-                    if (remaining > 0) {
-                        var has_empty = false;
-                        for (queries) |q| {
-                            if (!q.resolved and q.path.len == 0) {
+            if (root_peek.tag != .object and root_peek.tag != .array) {
+                if (remaining > 0) {
+                    var has_empty = false;
+                    for (queries) |q| {
+                        if (!q.resolved and q.path.len == 0) {
                             has_empty = true;
                             break;
                         }
@@ -551,8 +556,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining -= 1;
                             }
                         }
-                        }
                     }
+                }
 
                 if (queries.len > 1) {
                     const LessIdx = struct {
@@ -878,20 +883,20 @@ pub fn Reader(comptime limits: ReadLimits) type {
             const off = index * elem_size;
             const chunk = ta.bytes[off..][0..elem_size];
 
-	            return switch (ta.elem) {
-	                .u8 => .{ .u8 = chunk[0] },
-	                .i8 => .{ .i8 = @bitCast(chunk[0]) },
-	                .u16 => .{ .u16 = std.mem.readInt(u16, chunk[0..2], .little) },
-	                .i16 => .{ .i16 = std.mem.readInt(i16, chunk[0..2], .little) },
-	                .u32 => .{ .u32 = std.mem.readInt(u32, chunk[0..4], .little) },
-	                .i32 => .{ .i32 = std.mem.readInt(i32, chunk[0..4], .little) },
-	                .u64 => .{ .u64 = std.mem.readInt(u64, chunk[0..8], .little) },
-	                .i64 => .{ .i64 = std.mem.readInt(i64, chunk[0..8], .little) },
-	                .f32 => .{ .f32 = @bitCast(std.mem.readInt(u32, chunk[0..4], .little)) },
-	                .f64 => .{ .f64 = @bitCast(std.mem.readInt(u64, chunk[0..8], .little)) },
-	                .f16 => .{ .f16 = @bitCast(std.mem.readInt(u16, chunk[0..2], .little)) },
-	            };
-	        }
+            return switch (ta.elem) {
+                .u8 => .{ .u8 = chunk[0] },
+                .i8 => .{ .i8 = @bitCast(chunk[0]) },
+                .u16 => .{ .u16 = std.mem.readInt(u16, chunk[0..2], .little) },
+                .i16 => .{ .i16 = std.mem.readInt(i16, chunk[0..2], .little) },
+                .u32 => .{ .u32 = std.mem.readInt(u32, chunk[0..4], .little) },
+                .i32 => .{ .i32 = std.mem.readInt(i32, chunk[0..4], .little) },
+                .u64 => .{ .u64 = std.mem.readInt(u64, chunk[0..8], .little) },
+                .i64 => .{ .i64 = std.mem.readInt(i64, chunk[0..8], .little) },
+                .f32 => .{ .f32 = @bitCast(std.mem.readInt(u32, chunk[0..4], .little)) },
+                .f64 => .{ .f64 = @bitCast(std.mem.readInt(u64, chunk[0..8], .little)) },
+                .f16 => .{ .f16 = @bitCast(std.mem.readInt(u16, chunk[0..2], .little)) },
+            };
+        }
 
         /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
         /// Returns null if the path doesn't exist or points to an incompatible type.
