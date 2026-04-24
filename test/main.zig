@@ -15,7 +15,7 @@ var shared_encoded: [1024]u8 = undefined;
 var shared_encoded_len: usize = 0;
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }
 
 // =============================================================================

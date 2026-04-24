@@ -97,7 +97,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             // Decode the tag
             const decoded_tag = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded_tag.tag);
+            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded_tag.tag) orelse return error.InvalidEnumTag;
 
             switch (val_type) {
                 .containerEnd => {

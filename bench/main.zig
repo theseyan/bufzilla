@@ -8,6 +8,8 @@ const Reader = bufzilla.Reader;
 const Value = bufzilla.Value;
 const Common = bufzilla.Common;
 
+var bench_io: Io = undefined;
+
 /// Benchmark timer helper
 /// Run a benchmark and print results
 fn benchmark(
@@ -21,11 +23,12 @@ fn benchmark(
     }
 
     // Actual benchmark
-    var timer = try std.time.Timer.start();
+    const start = Io.Clock.awake.now(bench_io);
     for (0..iterations) |_| {
         try func();
     }
-    const elapsed_ns = timer.read();
+    const end = Io.Clock.awake.now(bench_io);
+    const elapsed_ns: u64 = @intCast(start.durationTo(end).toNanoseconds());
 
     const avg_ns = elapsed_ns / iterations;
     const ops_per_sec = if (avg_ns > 0) (1_000_000_000 / avg_ns) else 0;
@@ -1138,6 +1141,8 @@ fn benchApplyUpdatesSmall() !void {
 // ============================================================================
 
 pub fn main() !void {
+    bench_io = std.Io.Threaded.global_single_threaded.io();
+
     std.debug.print("\n", .{});
     std.debug.print("=" ** 80 ++ "\n", .{});
     std.debug.print("bufzilla Benchmark Suite\n", .{});
