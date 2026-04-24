@@ -258,7 +258,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
             const tag_byte = self.bytes[self.pos];
             const decoded = common.decodeTag(tag_byte);
-            const tag = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const tag = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse return error.InvalidEnumTag;
             return .{ .tag = tag, .data = decoded.data };
         }
 
@@ -296,7 +296,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
             const elem_byte = self.bytes[self.pos];
             self.pos += 1;
-            const elem = try std.meta.intToEnum(common.TypedArrayElem, elem_byte);
+            const elem = std.enums.fromInt(common.TypedArrayElem, elem_byte) orelse return error.InvalidEnumTag;
 
             const count_len: usize = @as(usize, tag_data) + 1;
             if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
@@ -369,7 +369,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             self.pos += 1;
 
             const decoded = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse return error.InvalidEnumTag;
 
             switch (val_type) {
                 .array, .object => {
@@ -385,7 +385,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                         self.pos += 1;
 
                         const inner_decoded = common.decodeTag(inner_tag);
-                        const inner_type = try std.meta.intToEnum(std.meta.Tag(common.Value), inner_decoded.tag);
+                        const inner_type = std.enums.fromInt(std.meta.Tag(common.Value), inner_decoded.tag) orelse return error.InvalidEnumTag;
 
                         const ev = try skipOneValue(self, inner_decoded, inner_type);
                         switch (ev) {
@@ -414,7 +414,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             self.pos += 1;
 
             const decoded = common.decodeTag(tag_byte);
-            const val_type = try std.meta.intToEnum(std.meta.Tag(common.Value), decoded.tag);
+            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse return error.InvalidEnumTag;
 
             if (val_type != .varIntBytes and val_type != .bytes and val_type != .smallBytes) {
                 return error.InvalidEnumTag;
