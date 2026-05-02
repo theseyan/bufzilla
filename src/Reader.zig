@@ -76,6 +76,13 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
         /// Reads a single data item of given type and advances the position.
         fn readBytes(self: *Self, comptime T: type) !T {
+            if (comptime T == u8) {
+                if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+                const byte = self.bytes[self.pos];
+                self.pos += 1;
+                return byte;
+            }
+
             if (@sizeOf(T) > self.bytes.len - self.pos) return error.UnexpectedEof;
 
             const bytes = self.bytes[self.pos..(self.pos + @sizeOf(T))];
@@ -482,6 +489,13 @@ pub fn Reader(comptime limits: ReadLimits) type {
         /// Each query's `value` is populated with the found Value or null.
         /// Malformed paths yield null for that query.
         pub fn readPaths(self: *Self, queries: []PathQuery) Error!void {
+            if (queries.len == 1) {
+                queries[0].value = try self.readPath(queries[0].path);
+                queries[0].resolved = true;
+                queries[0].orig_index = 0;
+                return;
+            }
+
             const saved_pos = self.pos;
             const saved_depth = self.depth;
             const saved_counts = self.iteration_counts;
@@ -963,8 +977,6 @@ pub fn Reader(comptime limits: ReadLimits) type {
         /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
         /// Returns null if the path doesn't exist or points to an incompatible type.
         pub fn readPath(self: *Self, path_str: []const u8) Error!?common.Value {
-            if (!path.validate(path_str)) return null;
-
             const saved_pos = self.pos;
             const saved_depth = self.depth;
             const saved_counts = self.iteration_counts;
