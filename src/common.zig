@@ -26,6 +26,7 @@ pub const TypedArray = struct {
 };
 
 pub const TypedArraySliceError = error{ EndianMismatch, TypeMismatch, LengthMismatch, BufferTooSmall };
+pub const TypedArrayElementError = error{ IndexOutOfBounds, LengthMismatch };
 
 /// Returns a zero-copy typed view of the typedArray payload.
 /// This is only valid on little-endian targets.
@@ -39,7 +40,7 @@ pub fn typedArrayAsView(comptime T: type, ta: TypedArray) TypedArraySliceError![
     };
     if (ta.elem != expected_elem) return error.TypeMismatch;
 
-    const needed = ta.count * @sizeOf(T);
+    const needed = std.math.mul(usize, ta.count, @sizeOf(T)) catch return error.LengthMismatch;
     if (ta.bytes.len != needed) return error.LengthMismatch;
 
     const ptr: [*]align(1) const T = @ptrCast(ta.bytes.ptr);
@@ -58,7 +59,7 @@ pub fn typedArrayAsSlice(comptime T: type, ta: TypedArray, out: []T) TypedArrayS
     if (ta.elem != expected_elem) return error.TypeMismatch;
 
     const elem_size = typedArrayElemSize(ta.elem);
-    const needed_bytes = ta.count * elem_size;
+    const needed_bytes = std.math.mul(usize, ta.count, elem_size) catch return error.LengthMismatch;
     if (ta.bytes.len != needed_bytes) return error.LengthMismatch;
     if (out.len < ta.count) return error.BufferTooSmall;
 
@@ -90,6 +91,31 @@ pub fn typedArrayAsSlice(comptime T: type, ta: TypedArray, out: []T) TypedArrayS
     }
 
     return dst;
+}
+
+pub fn typedArrayElementToValue(ta: TypedArray, index: usize) TypedArrayElementError!Value {
+    if (index >= ta.count) return error.IndexOutOfBounds;
+
+    const elem_size = typedArrayElemSize(ta.elem);
+    const expected_len = std.math.mul(usize, ta.count, elem_size) catch return error.LengthMismatch;
+    if (ta.bytes.len != expected_len) return error.LengthMismatch;
+
+    const off = index * elem_size;
+    const chunk = ta.bytes[off..][0..elem_size];
+
+    return switch (ta.elem) {
+        .u8 => .{ .u8 = chunk[0] },
+        .i8 => .{ .i8 = @bitCast(chunk[0]) },
+        .u16 => .{ .u16 = std.mem.readInt(u16, chunk[0..2], .little) },
+        .i16 => .{ .i16 = std.mem.readInt(i16, chunk[0..2], .little) },
+        .u32 => .{ .u32 = std.mem.readInt(u32, chunk[0..4], .little) },
+        .i32 => .{ .i32 = std.mem.readInt(i32, chunk[0..4], .little) },
+        .u64 => .{ .u64 = std.mem.readInt(u64, chunk[0..8], .little) },
+        .i64 => .{ .i64 = std.mem.readInt(i64, chunk[0..8], .little) },
+        .f16 => .{ .f16 = @bitCast(std.mem.readInt(u16, chunk[0..2], .little)) },
+        .f32 => .{ .f32 = @bitCast(std.mem.readInt(u32, chunk[0..4], .little)) },
+        .f64 => .{ .f64 = @bitCast(std.mem.readInt(u64, chunk[0..8], .little)) },
+    };
 }
 
 pub inline fn typedArrayElemSize(elem: TypedArrayElem) usize {

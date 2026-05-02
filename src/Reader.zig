@@ -317,22 +317,26 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
         const SkipEvent = enum { done, enter_container, exit_container };
 
+        inline fn skipBytes(self: *Self, len: usize) !void {
+            if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+            self.pos += len;
+        }
+
         inline fn skipOneValue(self: *Self, decoded: common.Tag, typ: std.meta.Tag(common.Value)) !SkipEvent {
             switch (typ) {
                 // Fixed size types
-                .f64, .i64, .u64 => self.pos += 8,
-                .f32, .i32, .u32 => self.pos += 4,
-                .f16 => self.pos += 2,
-                .i16, .u16 => self.pos += 2,
-                .i8, .u8 => self.pos += 1,
+                .f64, .i64, .u64 => try self.skipBytes(8),
+                .f32, .i32, .u32 => try self.skipBytes(4),
+                .f16 => try self.skipBytes(2),
+                .i16, .u16 => try self.skipBytes(2),
+                .i8, .u8 => try self.skipBytes(1),
                 .null, .bool => {},
                 .smallIntPositive, .smallIntNegative, .smallUint => {},
 
                 // Variable length integers
                 .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
                     const size: usize = @as(usize, decoded.data) + 1;
-                    if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
-                    self.pos += size;
+                    try self.skipBytes(size);
                 },
 
                 // Byte arrays
@@ -341,17 +345,15 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     if (limits.max_bytes_length) |max| {
                         if (len > max) return error.BytesTooLong;
                     }
-                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                    self.pos += len;
+                    try self.skipBytes(len);
                 },
                 .typedArray => {
                     const hdr = try self.readTypedArrayHeader(decoded.data);
-                    self.pos += hdr.payload_len;
+                    try self.skipBytes(hdr.payload_len);
                 },
                 .varIntBytes, .bytes => {
                     const len = try self.readBytesLength(typ, decoded.data);
-                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                    self.pos += len;
+                    try self.skipBytes(len);
                 },
 
                 .array, .object => return .enter_container,
@@ -532,11 +534,11 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             const root_peek = try self.peekTag();
 
-                if (root_peek.tag != .object and root_peek.tag != .array) {
-                    if (remaining > 0) {
-                        var has_empty = false;
-                        for (queries) |q| {
-                            if (!q.resolved and q.path.len == 0) {
+            if (root_peek.tag != .object and root_peek.tag != .array) {
+                if (remaining > 0) {
+                    var has_empty = false;
+                    for (queries) |q| {
+                        if (!q.resolved and q.path.len == 0) {
                             has_empty = true;
                             break;
                         }
@@ -551,8 +553,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining -= 1;
                             }
                         }
-                        }
                     }
+                }
 
                 if (queries.len > 1) {
                     const LessIdx = struct {
@@ -667,6 +669,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                             remaining.* -= 1;
                         }
                     }
+                    if (remaining.* == 0) return;
 
                     if (val == .object or val == .array) {
                         if (any_child) {
@@ -692,6 +695,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining.* -= 1;
                             }
                         }
+                        if (remaining.* == 0) return;
                     }
                 } else {
                     const val_peek = try self.peekTag();
@@ -708,6 +712,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining.* -= 1;
                             }
                         }
+                        if (remaining.* == 0) return;
                         try self.skipValue();
                     } else {
                         const val = try self.read();
@@ -786,6 +791,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                             remaining.* -= 1;
                         }
                     }
+                    if (remaining.* == 0) return;
 
                     if (val == .object or val == .array) {
                         if (any_child) {
@@ -811,6 +817,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining.* -= 1;
                             }
                         }
+                        if (remaining.* == 0) return;
                     }
                 } else {
                     const val_peek = try self.peekTag();
@@ -827,6 +834,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                                 remaining.* -= 1;
                             }
                         }
+                        if (remaining.* == 0) return;
                         try self.skipValue();
                     } else {
                         const val = try self.read();
@@ -867,38 +875,113 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     continue;
                 }
 
-                q.value = typedArrayElementToValue(ta, seg.index);
+                q.value = common.typedArrayElementToValue(ta, seg.index) catch unreachable;
                 q.resolved = true;
                 remaining.* -= 1;
             }
         }
 
-        fn typedArrayElementToValue(ta: common.TypedArray, index: usize) common.Value {
-            const elem_size = common.typedArrayElemSize(ta.elem);
-            const off = index * elem_size;
-            const chunk = ta.bytes[off..][0..elem_size];
+        fn readPathFromValue(self: *Self, val: common.Value, remaining_path: []const u8) Error!?common.Value {
+            switch (val) {
+                .object => return try self.readPathFromObject(remaining_path),
+                .array => return try self.readPathFromArray(remaining_path),
+                .typedArray => |ta| return self.readPathFromTypedArray(ta, remaining_path),
+                else => return null,
+            }
+        }
 
-	            return switch (ta.elem) {
-	                .u8 => .{ .u8 = chunk[0] },
-	                .i8 => .{ .i8 = @bitCast(chunk[0]) },
-	                .u16 => .{ .u16 = std.mem.readInt(u16, chunk[0..2], .little) },
-	                .i16 => .{ .i16 = std.mem.readInt(i16, chunk[0..2], .little) },
-	                .u32 => .{ .u32 = std.mem.readInt(u32, chunk[0..4], .little) },
-	                .i32 => .{ .i32 = std.mem.readInt(i32, chunk[0..4], .little) },
-	                .u64 => .{ .u64 = std.mem.readInt(u64, chunk[0..8], .little) },
-	                .i64 => .{ .i64 = std.mem.readInt(i64, chunk[0..8], .little) },
-	                .f32 => .{ .f32 = @bitCast(std.mem.readInt(u32, chunk[0..4], .little)) },
-	                .f64 => .{ .f64 = @bitCast(std.mem.readInt(u64, chunk[0..8], .little)) },
-	                .f16 => .{ .f16 = @bitCast(std.mem.readInt(u16, chunk[0..2], .little)) },
-	            };
-	        }
+        fn readPathFromObject(self: *Self, remaining_path: []const u8) Error!?common.Value {
+            const seg = path.parseSegment(remaining_path) orelse return null;
+            if (seg.is_index) return null;
+
+            var kv_count: usize = 0;
+            while (true) {
+                const peek = try self.peekTag();
+                if (peek.tag == .containerEnd) {
+                    _ = try self.read();
+                    return null;
+                }
+
+                if (limits.max_object_size) |max| {
+                    if (kv_count >= max) return error.ObjectTooLarge;
+                }
+
+                if (peek.tag != .varIntBytes and peek.tag != .bytes and peek.tag != .smallBytes) {
+                    try self.skipValue();
+                    try self.skipValue();
+                    kv_count += 1;
+                    continue;
+                }
+
+                const key = try self.readBytesSlice();
+                if (!std.mem.eql(u8, key, seg.key)) {
+                    try self.skipValue();
+                    kv_count += 1;
+                    continue;
+                }
+
+                const child = try self.read();
+                if (seg.rest.len == 0) return child;
+                return try self.readPathFromValue(child, seg.rest);
+            }
+        }
+
+        fn readPathFromArray(self: *Self, remaining_path: []const u8) Error!?common.Value {
+            const seg = path.parseSegment(remaining_path) orelse return null;
+            if (!seg.is_index) return null;
+
+            var idx: usize = 0;
+            while (true) : (idx += 1) {
+                const peek = try self.peekTag();
+                if (peek.tag == .containerEnd) {
+                    _ = try self.read();
+                    return null;
+                }
+
+                if (limits.max_array_length) |max| {
+                    if (idx >= max) return error.ArrayTooLarge;
+                }
+
+                if (idx != seg.index) {
+                    try self.skipValue();
+                    continue;
+                }
+
+                const child = try self.read();
+                if (seg.rest.len == 0) return child;
+                return try self.readPathFromValue(child, seg.rest);
+            }
+        }
+
+        fn readPathFromTypedArray(self: *Self, ta: common.TypedArray, remaining_path: []const u8) ?common.Value {
+            _ = self;
+            const seg = path.parseSegment(remaining_path) orelse return null;
+            if (!seg.is_index or seg.index >= ta.count or seg.rest.len != 0) return null;
+            return common.typedArrayElementToValue(ta, seg.index) catch null;
+        }
 
         /// Reads a value at a given path. Path format: "key", "key.nested", "array[0]", "obj.arr[2].name"
         /// Returns null if the path doesn't exist or points to an incompatible type.
         pub fn readPath(self: *Self, path_str: []const u8) Error!?common.Value {
-            var q = [_]PathQuery{.{ .path = path_str }};
-            try self.readPaths(q[0..]);
-            return q[0].value;
+            if (!path.validate(path_str)) return null;
+
+            const saved_pos = self.pos;
+            const saved_depth = self.depth;
+            const saved_counts = self.iteration_counts;
+            defer {
+                self.pos = saved_pos;
+                self.depth = saved_depth;
+                self.iteration_counts = saved_counts;
+            }
+
+            self.pos = 0;
+            self.depth = 0;
+            self.iteration_counts = [_]usize{0} ** counter_stack_size;
+
+            const root_val = try self.read();
+            if (path_str.len == 0) return root_val;
+
+            return try self.readPathFromValue(root_val, path_str);
         }
     };
 }

@@ -1,5 +1,6 @@
 /// Unit tests
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const bufzilla = @import("bufzilla");
 
@@ -360,6 +361,35 @@ test "Common.typedArrayAsSlice decodes into caller buffer" {
     try std.testing.expectEqual(vec[1], slice[1]);
     try std.testing.expectEqual(vec[2], slice[2]);
     try std.testing.expectEqual(vec[3], slice[3]);
+}
+
+test "Common typedArray helpers reject overflowing payload sizes" {
+    const ta = Common.TypedArray{
+        .elem = .u16,
+        .count = std.math.maxInt(usize),
+        .bytes = &.{},
+    };
+
+    var out: [1]u16 = undefined;
+    try std.testing.expectError(error.LengthMismatch, Common.typedArrayAsSlice(u16, ta, out[0..]));
+    if (comptime builtin.cpu.arch.endian() == .little) {
+        try std.testing.expectError(error.LengthMismatch, Common.typedArrayAsView(u16, ta));
+    }
+    try std.testing.expectError(error.LengthMismatch, Common.typedArrayElementToValue(ta, 0));
+}
+
+test "Common.typedArrayElementToValue validates bounds and length" {
+    const bytes = [_]u8{ 1, 0, 2, 0 };
+    const ta = Common.TypedArray{ .elem = .u16, .count = 2, .bytes = &bytes };
+
+    const v = try Common.typedArrayElementToValue(ta, 1);
+    try std.testing.expect(v == .u16);
+    try std.testing.expectEqual(@as(u16, 2), v.u16);
+
+    try std.testing.expectError(error.IndexOutOfBounds, Common.typedArrayElementToValue(ta, 2));
+
+    const truncated = Common.TypedArray{ .elem = .u16, .count = 2, .bytes = bytes[0..3] };
+    try std.testing.expectError(error.LengthMismatch, Common.typedArrayElementToValue(truncated, 0));
 }
 
 test "writer/fixed: empty containers" {
@@ -911,6 +941,23 @@ test "reader: malformed varIntBytes length" {
     // Without limit, returns UnexpectedEof
     var reader2 = Reader(.{}).init(&malformed);
     try std.testing.expectError(error.UnexpectedEof, reader2.read());
+}
+
+test "reader: skipValue checks fixed-width payload bounds" {
+    const f64_tag = Common.encodeTag(@intFromEnum(Value.f64), 0);
+    const u32_tag = Common.encodeTag(@intFromEnum(Value.u32), 0);
+
+    {
+        const malformed = &[_]u8{f64_tag};
+        var reader = Reader(.{}).init(malformed);
+        try std.testing.expectError(error.UnexpectedEof, reader.skipValue());
+    }
+
+    {
+        const malformed = &[_]u8{ u32_tag, 1, 2, 3 };
+        var reader = Reader(.{}).init(malformed);
+        try std.testing.expectError(error.UnexpectedEof, reader.skipValue());
+    }
 }
 
 test "reader: malicious bytes length causes BytesTooLong" {
