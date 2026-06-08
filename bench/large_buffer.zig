@@ -18,9 +18,9 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
     std.debug.print("Large Buffer readPath Benchmark\n", .{});
-    std.debug.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
 
     // Generate large buffer
     std.debug.print("Generating large encoded buffer...\n", .{});
@@ -99,7 +99,7 @@ pub fn main() !void {
 
     // Benchmark different readPath scenarios
     std.debug.print("Benchmarks:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
 
     const iterations = 1000;
 
@@ -249,7 +249,7 @@ pub fn main() !void {
     }
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
 
     // Calculate throughput
     {
@@ -266,5 +266,5 @@ pub fn main() !void {
         std.debug.print("Throughput scanning to end: {d:.2} MiB/s\n", .{throughput_mib});
     }
 
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
 }
