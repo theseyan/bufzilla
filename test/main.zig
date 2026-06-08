@@ -291,7 +291,7 @@ test "reader: typedArray respects max_bytes_length" {
     const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
     const subtype: u8 = @intFromEnum(Common.TypedArrayElem.u32);
     const count: u8 = 3; // payload is 12 bytes
-    const payload = [_]u8{0} ** 12;
+    const payload: [12]u8 = @splat(0);
     var buf: [1 + 1 + 1 + 12]u8 = undefined;
     buf[0] = tag;
     buf[1] = subtype;
@@ -1246,8 +1246,8 @@ test "reader: max_bytes_length limit enforced for varIntBytes" {
     var writer = Writer.init(&enc_fixed);
 
     // Write a 100-byte string
-    const long_string = "x" ** 100;
-    try writer.writeAny(long_string);
+    const long_string: [100]u8 = @splat('x');
+    try writer.writeAny(&long_string);
 
     // Set max_bytes_length to 50
     var reader = Reader(.{ .max_bytes_length = 50 }).init(enc_fixed.buffered());
@@ -1261,7 +1261,7 @@ test "reader: max_bytes_length limit enforced for bytes" {
     var writer = Writer.init(&enc_fixed);
 
     // Write a 100-byte array using the fixed bytes type
-    const long_data = [_]u8{0x42} ** 100;
+    const long_data: [100]u8 = @splat(0x42);
     try writer.write(Value{ .bytes = &long_data }, .bytes);
 
     // Set max_bytes_length to 50
@@ -1276,14 +1276,14 @@ test "reader: max_bytes_length null allows large bytes" {
     var writer = Writer.init(&enc_fixed);
 
     // Write a 1000-byte string
-    const long_string = "y" ** 1000;
-    try writer.writeAny(long_string);
+    const long_string: [1000]u8 = @splat('y');
+    try writer.writeAny(&long_string);
 
     // Set max_bytes_length to null
     var reader = Reader(.{ .max_bytes_length = null }).init(enc_fixed.buffered());
 
     const val = try reader.read();
-    try std.testing.expectEqualStrings(long_string, val.bytes);
+    try std.testing.expectEqualStrings(&long_string, val.bytes);
 }
 
 test "reader: max_array_length limit enforced" {
@@ -1420,7 +1420,8 @@ test "reader: combined limits enforced" {
     // Create nested structure with large string
     try writer.startObject();
     try writer.writeAny("data");
-    try writer.writeAny("z" ** 200);
+    const value = @as([200]u8, @splat('z'));
+    try writer.writeAny(&value);
     try writer.endContainer();
 
     // Set strict limits on everything
@@ -2104,7 +2105,8 @@ test "readPath: propagates max_bytes_length error" {
     // Create structure with a long string that we need to skip
     try writer.startObject();
     try writer.writeAny("long_key");
-    try writer.writeAny("x" ** 100); // 100 byte string
+    const value = @as([100]u8, @splat('x'));
+    try writer.writeAny(&value); // 100 byte string
     try writer.writeAny("target");
     try writer.writeAny(@as(i64, 42));
     try writer.endContainer();
@@ -2124,7 +2126,8 @@ test "readPaths: propagates max_bytes_length error" {
     // Create structure with a long string that we need to skip
     try writer.startObject();
     try writer.writeAny("long_key");
-    try writer.writeAny("x" ** 100); // 100 byte string
+    const value = @as([100]u8, @splat('x'));
+    try writer.writeAny(&value); // 100 byte string
     try writer.writeAny("target");
     try writer.writeAny(@as(i64, 42));
     try writer.endContainer();
