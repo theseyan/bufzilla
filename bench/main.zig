@@ -55,7 +55,7 @@ fn benchNullRead() !void {
     const BufferLen = 100;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -83,7 +83,7 @@ fn benchBoolRead() !void {
     const BufferLen = 100;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -111,7 +111,7 @@ fn benchSmallIntRead() !void {
     const BufferLen = 100;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -140,7 +140,7 @@ fn benchLargeIntRead() !void {
     const BufferLen = 100;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -168,7 +168,7 @@ fn benchFloatRead() !void {
     const BufferLen = 100;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -200,7 +200,7 @@ fn benchShortStrRead() !void {
     const BufferLen = 1000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -221,7 +221,8 @@ fn benchMediumStrWrite() !void {
     var fixed = Io.Writer.fixed(&arr);
     var writer = Writer.init(&fixed);
 
-    const test_str = "This is a medium length string for benchmarking bufzilla performance. " ** 4;
+    const s = "This is a medium length string for benchmarking bufzilla performance. ";
+    const test_str: [4 * s.len]u8 = @bitCast(@as([4][s.len]u8, @splat(s.*)));
     try writer.writeAny(test_str);
 }
 
@@ -229,14 +230,15 @@ fn benchMediumStrRead() !void {
     const BufferLen = 2000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
     if (!State.initialized) {
         var fixed = Io.Writer.fixed(&State.buffer);
         var writer = Writer.init(&fixed);
-        const test_str = "This is a medium length string for benchmarking bufzilla performance. " ** 4;
+        const s = "This is a medium length string for benchmarking bufzilla performance. ";
+        const test_str: [4 * s.len]u8 = @bitCast(@as([4][s.len]u8, @splat(s.*)));
         try writer.writeAny(test_str);
         State.len = fixed.buffered().len;
         State.initialized = true;
@@ -255,7 +257,8 @@ fn benchSmallBinWrite() !void {
     var fixed = Io.Writer.fixed(&arr);
     var writer = Writer.init(&fixed);
 
-    const data: []const u8 = &([_]u8{1} ** 32);
+    const d: [32]u8 = @splat(1);
+    const data: []const u8 = &d;
     try writer.writeAny(data);
 }
 
@@ -263,14 +266,15 @@ fn benchSmallBinRead() !void {
     const BufferLen = 1000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
     if (!State.initialized) {
         var fixed = Io.Writer.fixed(&State.buffer);
         var writer = Writer.init(&fixed);
-        const data: []const u8 = &([_]u8{1} ** 32);
+        const d: [32]u8 = @splat(1);
+        const data: []const u8 = &d;
         try writer.writeAny(data);
         State.len = fixed.buffered().len;
         State.initialized = true;
@@ -285,7 +289,8 @@ fn benchLargeBinWrite() !void {
     var fixed = Io.Writer.fixed(&arr);
     var writer = Writer.init(&fixed);
 
-    const data: []const u8 = &([_]u8{0x42} ** 1024);
+    const d: [1024]u8 = @splat(0x42);
+    const data: []const u8 = &d;
     try writer.writeAny(data);
 }
 
@@ -293,14 +298,15 @@ fn benchLargeBinRead() !void {
     const BufferLen = 2000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
     if (!State.initialized) {
         var fixed = Io.Writer.fixed(&State.buffer);
         var writer = Writer.init(&fixed);
-        const data: []const u8 = &([_]u8{0x42} ** 1024);
+        const d: [1024]u8 = @splat(0x42);
+        const data: []const u8 = &d;
         try writer.writeAny(data);
         State.len = fixed.buffered().len;
         State.initialized = true;
@@ -330,7 +336,7 @@ fn benchSmallArrayRead() !void {
     const BufferLen = 1000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -367,7 +373,7 @@ fn benchMediumArrayRead() !void {
     const BufferLen = 5000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -397,7 +403,7 @@ fn benchTypedArrayF32Write() !void {
     var fixed = Io.Writer.fixed(&arr);
     var writer = Writer.init(&fixed);
 
-    const vec = [_]f32{1.0} ** 768;
+    const vec: [768]f32 = @splat(1.0);
     try writer.writeTypedArray(&vec);
 }
 
@@ -405,14 +411,14 @@ fn benchTypedArrayF32Read() !void {
     const BufferLen = 4096;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
     if (!State.initialized) {
         var fixed = Io.Writer.fixed(&State.buffer);
         var writer = Writer.init(&fixed);
-        const vec = [_]f32{1.0} ** 768;
+        const vec: [768]f32 = @splat(1.0);
         try writer.writeTypedArray(&vec);
         State.len = fixed.buffered().len;
         State.initialized = true;
@@ -426,14 +432,14 @@ fn benchTypedArrayF32Skip() !void {
     const BufferLen = 4096;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
     if (!State.initialized) {
         var fixed = Io.Writer.fixed(&State.buffer);
         var writer = Writer.init(&fixed);
-        const vec = [_]f32{1.0} ** 768;
+        const vec: [768]f32 = @splat(1.0);
         try writer.writeTypedArray(&vec);
         try writer.writeAny(true);
         State.len = fixed.buffered().len;
@@ -451,7 +457,7 @@ fn benchTypedArrayU16Write() !void {
     var writer = Writer.init(&fixed);
 
     const elem: u16 = 0x3f80;
-    const vec = [_]u16{elem} ** 768;
+    const vec: [768]u16 = @splat(elem);
     try writer.writeTypedArray(&vec);
 }
 
@@ -459,7 +465,7 @@ fn benchTypedArrayU16Read() !void {
     const BufferLen = 2048;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -467,7 +473,7 @@ fn benchTypedArrayU16Read() !void {
         var fixed = Io.Writer.fixed(&State.buffer);
         var writer = Writer.init(&fixed);
         const elem: u16 = 0x3f80;
-        const vec = [_]u16{elem} ** 768;
+        const vec: [768]u16 = @splat(elem);
         try writer.writeTypedArray(&vec);
         State.len = fixed.buffered().len;
         State.initialized = true;
@@ -500,7 +506,7 @@ fn benchSmallObjectRead() !void {
     const BufferLen = 2000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -543,7 +549,7 @@ fn benchMediumObjectRead() !void {
     const BufferLen = 10000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -603,7 +609,7 @@ fn benchNestedStructureRead() !void {
     const BufferLen = 10000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -654,7 +660,8 @@ fn benchMixedTypesWrite() !void {
     try writer.writeAny(@as(f64, 3.14));
     try writer.writeAny("hello");
 
-    const bin_data: []const u8 = &([_]u8{1} ** 8);
+    const d: [8]u8 = @splat(1);
+    const bin_data: []const u8 = &d;
     try writer.writeAny(bin_data);
 
     try writer.startArray();
@@ -674,7 +681,7 @@ fn benchMixedTypesRead() !void {
     const BufferLen = 5000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -690,7 +697,8 @@ fn benchMixedTypesRead() !void {
         try writer.writeAny(@as(f64, 3.14));
         try writer.writeAny("hello");
 
-        const bin_data: []const u8 = &([_]u8{1} ** 8);
+        const d: [8]u8 = @splat(1);
+        const bin_data: []const u8 = &d;
         try writer.writeAny(bin_data);
 
         try writer.startArray();
@@ -753,7 +761,7 @@ fn benchStructRead() !void {
     const BufferLen = 2000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -804,7 +812,7 @@ fn benchComplexStructRead() !void {
     const BufferLen = 5000;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -845,7 +853,7 @@ fn benchReadPathSimpleKey() !void {
     const BufferLen = 256;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -872,7 +880,7 @@ fn benchReadPathNestedKey() !void {
     const BufferLen = 512;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -901,7 +909,7 @@ fn benchReadPathDeepNested() !void {
     const BufferLen = 512;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -930,7 +938,7 @@ fn benchReadPathArrayIndex() !void {
     const BufferLen = 512;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -954,7 +962,7 @@ fn benchReadPathMixed() !void {
     const BufferLen = 1024;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -989,7 +997,7 @@ fn benchReadPathTypedArrayIndex() !void {
     const BufferLen = 4096;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -998,7 +1006,7 @@ fn benchReadPathTypedArrayIndex() !void {
         var writer = Writer.init(&fixed);
         try writer.startObject();
         try writer.writeAny("vec");
-        const vec = [_]f32{1.0} ** 768;
+        const vec: [768]f32 = @splat(1.0);
         try writer.writeTypedArray(&vec);
         try writer.endContainer();
         State.len = fixed.buffered().len;
@@ -1013,7 +1021,7 @@ fn benchReadPathMissing() !void {
     const BufferLen = 256;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
     };
 
@@ -1042,7 +1050,7 @@ fn benchReadPathsSimple1() !void {
     const BufferLen = 256;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
         var queries: [1]bufzilla.PathQuery = undefined;
     };
@@ -1073,7 +1081,7 @@ fn benchReadPathsSimple3() !void {
     const BufferLen = 256;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
         var queries: [3]bufzilla.PathQuery = undefined;
     };
@@ -1108,7 +1116,7 @@ fn benchReadPathsMixed3() !void {
     const BufferLen = 1024;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
         var queries: [3]bufzilla.PathQuery = undefined;
     };
@@ -1155,7 +1163,7 @@ fn benchApplyUpdatesSmall() !void {
     const BufferLen = 2048;
     const State = struct {
         var initialized = false;
-        var buffer: [BufferLen]u8 = [_]u8{0} ** BufferLen;
+        var buffer: [BufferLen]u8 = @splat(0);
         var len: usize = 0;
         var new_a: i64 = 2;
         var new_d: []const u8 = "new";
@@ -1199,13 +1207,13 @@ pub fn main() !void {
     bench_io = std.Io.Threaded.global_single_threaded.io();
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
     std.debug.print("bufzilla Benchmark Suite\n", .{});
-    std.debug.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n\n", .{});
 
     // Basic Types
     std.debug.print("Basic Types:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Null Write", 1000000, benchNullWrite);
     try benchmark("Null Read", 1000000, benchNullRead);
     try benchmark("Bool Write", 1000000, benchBoolWrite);
@@ -1220,7 +1228,7 @@ pub fn main() !void {
 
     // Strings
     std.debug.print("Strings:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Short String Write (5 bytes)", 500000, benchShortStrWrite);
     try benchmark("Short String Read (5 bytes)", 500000, benchShortStrRead);
     try benchmark("Medium String Write (~300 bytes)", 100000, benchMediumStrWrite);
@@ -1229,7 +1237,7 @@ pub fn main() !void {
 
     // Binary Data
     std.debug.print("Binary Data:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Small Binary Write (32 bytes)", 500000, benchSmallBinWrite);
     try benchmark("Small Binary Read (32 bytes)", 500000, benchSmallBinRead);
     try benchmark("Large Binary Write (1KB)", 100000, benchLargeBinWrite);
@@ -1238,7 +1246,7 @@ pub fn main() !void {
 
     // Arrays
     std.debug.print("Arrays:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Small Array Write (10 elements)", 100000, benchSmallArrayWrite);
     try benchmark("Small Array Read (10 elements)", 100000, benchSmallArrayRead);
     try benchmark("Medium Array Write (100 elements)", 50000, benchMediumArrayWrite);
@@ -1247,7 +1255,7 @@ pub fn main() !void {
 
     // Typed Arrays
     std.debug.print("Typed Arrays:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("TypedArray f32 Write (768 elems)", 50000, benchTypedArrayF32Write);
     try benchmark("TypedArray f32 Read (header)", 200000, benchTypedArrayF32Read);
     try benchmark("TypedArray f32 Skip (768 elems)", 200000, benchTypedArrayF32Skip);
@@ -1257,7 +1265,7 @@ pub fn main() !void {
 
     // Objects (Maps)
     std.debug.print("Objects (Maps):\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Small Object Write (10 entries)", 100000, benchSmallObjectWrite);
     try benchmark("Small Object Read (10 entries)", 100000, benchSmallObjectRead);
     try benchmark("Medium Object Write (50 entries)", 50000, benchMediumObjectWrite);
@@ -1266,7 +1274,7 @@ pub fn main() !void {
 
     // Complex Structures
     std.debug.print("Complex Structures:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Nested Structure Write", 50000, benchNestedStructureWrite);
     try benchmark("Nested Structure Read", 50000, benchNestedStructureRead);
     try benchmark("Mixed Types Write", 50000, benchMixedTypesWrite);
@@ -1275,7 +1283,7 @@ pub fn main() !void {
 
     // Struct Serialization
     std.debug.print("Struct Serialization:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Simple Struct Write", 100000, benchStructWrite);
     try benchmark("Simple Struct Read", 100000, benchStructRead);
     try benchmark("Complex Struct Write", 50000, benchComplexStructWrite);
@@ -1284,7 +1292,7 @@ pub fn main() !void {
 
     // Path Access
     std.debug.print("Path Access (readPath):\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("Simple Key Access", 500000, benchReadPathSimpleKey);
     try benchmark("Nested Key Access (2 levels)", 500000, benchReadPathNestedKey);
     try benchmark("Deep Nested Access (3 levels)", 200000, benchReadPathDeepNested);
@@ -1296,7 +1304,7 @@ pub fn main() !void {
 
     // Multi-path Access
     std.debug.print("Path Access (readPaths):\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("ReadPaths Simple (1 path)", 500000, benchReadPathsSimple1);
     try benchmark("ReadPaths Simple (3 paths)", 300000, benchReadPathsSimple3);
     try benchmark("ReadPaths Mixed (3 paths)", 200000, benchReadPathsMixed3);
@@ -1304,11 +1312,11 @@ pub fn main() !void {
 
     // Updates
     std.debug.print("Streaming Updates (applyUpdates):\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('-')) ++ "\n", .{});
     try benchmark("ApplyUpdates Small (2 patches)", 200000, benchApplyUpdatesSmall);
     std.debug.print("\n", .{});
 
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
     std.debug.print("Benchmark Complete\n", .{});
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(@as([80]u8, @splat('=')) ++ "\n", .{});
 }

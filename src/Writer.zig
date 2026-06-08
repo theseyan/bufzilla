@@ -314,35 +314,35 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         },
         .@"struct" => |struct_info| {
             try self.startObject();
-            inline for (struct_info.fields) |field| {
+            inline for (struct_info.field_names) |field_name| {
                 // Precompute encoded key prefix
                 const key_prefix = comptime blk: {
-                    if (field.name.len <= 7) {
-                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.smallBytes), @truncate(field.name.len));
-                        var prefix: [1 + field.name.len]u8 = undefined;
+                    if (field_name.len <= 7) {
+                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.smallBytes), @truncate(field_name.len));
+                        var prefix: [1 + field_name.len]u8 = undefined;
                         prefix[0] = tag_byte;
-                        for (0..field.name.len) |i| {
-                            prefix[1 + i] = field.name[i];
+                        for (0..field_name.len) |i| {
+                            prefix[1 + i] = field_name[i];
                         }
-                        break :blk prefix[0 .. 1 + field.name.len].*;
+                        break :blk prefix[0 .. 1 + field_name.len].*;
                     } else {
-                        const varint = common.encodeVarInt(field.name.len);
+                        const varint = common.encodeVarInt(field_name.len);
                         const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
                         const len_size: usize = @as(usize, varint.size) + 1;
-                        var prefix: [1 + 8 + field.name.len]u8 = undefined;
+                        var prefix: [1 + 8 + field_name.len]u8 = undefined;
                         prefix[0] = tag_byte;
                         for (0..len_size) |i| {
                             prefix[1 + i] = varint.bytes[i];
                         }
                         // Include the field name in the prefix
-                        for (0..field.name.len) |i| {
-                            prefix[1 + len_size + i] = field.name[i];
+                        for (0..field_name.len) |i| {
+                            prefix[1 + len_size + i] = field_name[i];
                         }
-                        break :blk prefix[0 .. 1 + len_size + field.name.len].*;
+                        break :blk prefix[0 .. 1 + len_size + field_name.len].*;
                     }
                 };
                 try self.raw.writeAll(&key_prefix);
-                const val = @field(data, field.name);
+                const val = @field(data, field_name);
                 try self.writeAnyExplicit(@TypeOf(val), val);
             }
             try self.endContainer();
@@ -365,10 +365,10 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .@"union" => |union_info| {
             if (union_info.tag_type) |TT| {
                 const tag: TT = data;
-                inline for (union_info.fields) |field| {
-                    const field_tag = @field(TT, field.name);
+                inline for (union_info.field_names) |field_name| {
+                    const field_tag = @field(TT, field_name);
                     if (field_tag == tag) {
-                        const field_value = @field(data, field.name);
+                        const field_value = @field(data, field_name);
                         try self.writeAnyExplicit(@TypeOf(field_value), field_value);
                         break;
                     }
