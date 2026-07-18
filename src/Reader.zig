@@ -271,26 +271,25 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
         /// Reads the length from a varIntBytes or bytes tag.
         inline fn readBytesLength(self: *Self, val_type: std.meta.Tag(common.Value), tag_data: u3) !usize {
-            if (val_type == .varIntBytes) {
+            const len_u64 = if (val_type == .varIntBytes) blk: {
                 const size_len: usize = @as(usize, tag_data) + 1;
                 if (size_len > self.bytes.len - self.pos) return error.UnexpectedEof;
                 const len = common.decodeVarInt(self.bytes[self.pos..][0..size_len]);
                 self.pos += size_len;
-
-                if (limits.max_bytes_length) |max| {
-                    if (len > max) return error.BytesTooLong;
-                }
-                return len;
-            } else { // .bytes
+                break :blk len;
+            } else blk: { // .bytes
                 if (8 > self.bytes.len - self.pos) return error.UnexpectedEof;
                 const len = std.mem.readInt(u64, self.bytes[self.pos..][0..8], .little);
                 self.pos += 8;
+                break :blk len;
+            };
 
-                if (limits.max_bytes_length) |max| {
-                    if (len > max) return error.BytesTooLong;
-                }
-                return len;
+            if (len_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
+            const len: usize = @intCast(len_u64);
+            if (limits.max_bytes_length) |max| {
+                if (len > max) return error.BytesTooLong;
             }
+            return len;
         }
 
         const TypedArrayHeader = struct {

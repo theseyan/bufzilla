@@ -11,6 +11,7 @@ pub const Value = bufzilla.Value;
 pub const Common = bufzilla.Common;
 
 pub const encodingTests = @import("encoding.zig");
+pub const cApiTests = @import("c_api.zig");
 
 var shared_encoded: [1024]u8 = undefined;
 var shared_encoded_len: usize = 0;
@@ -825,6 +826,20 @@ test "inspect/allocating: json output" {
     ;
 
     try std.testing.expectEqualStrings(expected, aw.written());
+}
+
+test "inspect: printValue renders varint variants" {
+    var out_buffer: [64]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect(.{}).init(&.{}, &out_fixed, .{});
+
+    try inspector.printValue(.{ .varIntUnsigned = 42 }, 0);
+    try out_fixed.writeAll(", ");
+    try inspector.printValue(.{ .varIntSignedPositive = 17 }, 0);
+    try out_fixed.writeAll(", ");
+    try inspector.printValue(.{ .varIntSignedNegative = -9 }, 0);
+
+    try std.testing.expectEqualStrings("42, 17, -9", out_fixed.buffered());
 }
 
 test "inspect: custom options" {

@@ -323,6 +323,16 @@ Comprehensive unit tests are present in the `test/` directory.
 zig build test
 ```
 
+## C API
+
+`zig build` installs both static and dynamic C libraries plus `bufzilla.h`:
+
+```bash
+zig build
+```
+
+C callers include `bufzilla.h`, allocate `bufzilla_writer` / `bufzilla_reader` state themselves, and provide all encode/decode output buffers and scratch memory. The C API does not allocate internally.
+
 ## Benchmarks
 
 Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=ReleaseFast`.

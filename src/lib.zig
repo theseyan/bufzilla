@@ -16,3 +16,4 @@ pub const InspectError = inspect_mod.Error;
 
 pub const Common = @import("common.zig");
 pub const Value = Common.Value;
+pub const Path = @import("path.zig");

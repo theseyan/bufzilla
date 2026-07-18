@@ -132,7 +132,7 @@ fn benchLargeIntWrite() !void {
     var fixed = Io.Writer.fixed(&arr);
     var writer = Writer.init(&fixed);
 
-    // i64 max - requires full 8 bytes after ZigZag encoding
+    // i64 max requires a full 8-byte signed-magnitude payload.
     try writer.writeAny(@as(i64, 9223372036854775807));
 }
 

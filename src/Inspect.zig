@@ -156,7 +156,9 @@ pub fn Inspect(comptime limits: ReadLimits) type {
                 .containerEnd => try w.writeAll("END"),
                 .smallIntPositive => try w.print("{d}", .{val.smallIntPositive}),
                 .smallIntNegative => try w.print("-{d}", .{val.smallIntNegative}),
-                .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {},
+                .varIntUnsigned => try w.print("{d}", .{val.varIntUnsigned}),
+                .varIntSignedPositive => try w.print("{d}", .{val.varIntSignedPositive}),
+                .varIntSignedNegative => try w.print("{d}", .{val.varIntSignedNegative}),
             }
         }
 

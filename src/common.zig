@@ -219,16 +219,6 @@ pub inline fn decodeVarInt(buf: []const u8) u64 {
     return std.mem.readVarInt(u64, buf, .little);
 }
 
-/// Encodes a 64-bit signed integer using ZigZag encoding.
-pub inline fn encodeZigZag(x: i64) u64 {
-    return @bitCast((x << 1) ^ (x >> 63));
-}
-
-/// Decodes a ZigZag-encoded integer.
-pub inline fn decodeZigZag(x: u64) i64 {
-    return @bitCast(@as(i64, @intCast(x >> 1)) ^ -@as(i64, @intCast(x & 1)));
-}
-
 /// Encodes a tag and data into a byte.
 pub inline fn encodeTag(tag: u5, data: u3) u8 {
     return @bitCast(Tag{ .tag = tag, .data = data });

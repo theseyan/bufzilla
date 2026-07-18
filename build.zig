@@ -9,10 +9,26 @@ pub fn build(b: *std.Build) void {
     // Whether to use self-hosted backend
     const no_llvm = b.option(bool, "no-llvm", "don't use LLVM and LLD") orelse false;
 
-    // Unit tests
-    const exe_unit_tests = b.addTest(.{
+    const c_api_module = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .imports = &.{.{ .name = "bufzilla", .module = bufzilla }},
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const static_lib = b.addLibrary(.{
+        .linkage = .static,
+        .name = "bufzilla",
+        .root_module = c_api_module,
+        .use_lld = !no_llvm and target.result.os.tag != .macos,
+        .use_llvm = !no_llvm,
+    });
+
+    const dynamic_lib = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = "bufzilla",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("test/main.zig"),
+            .root_source_file = b.path("src/c_api.zig"),
             .imports = &.{.{ .name = "bufzilla", .module = bufzilla }},
             .target = target,
             .optimize = optimize,
@@ -21,8 +37,49 @@ pub fn build(b: *std.Build) void {
         .use_llvm = !no_llvm,
     });
 
+    b.installArtifact(static_lib);
+    b.installArtifact(dynamic_lib);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("include/bufzilla.h"), .header, "bufzilla.h").step);
+
+    // Unit tests
+    const exe_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/main.zig"),
+            .imports = &.{
+                .{ .name = "bufzilla", .module = bufzilla },
+                .{ .name = "bufzilla_c", .module = b.createModule(.{
+                    .root_source_file = b.path("src/c_api.zig"),
+                    .imports = &.{.{ .name = "bufzilla", .module = bufzilla }},
+                }) },
+            },
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_lld = !no_llvm and target.result.os.tag != .macos,
+        .use_llvm = !no_llvm,
+    });
+
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-    b.step("test", "Run unit tests").dependOn(&run_exe_unit_tests.step);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_exe_unit_tests.step);
+
+    const c_api_smoke = b.addExecutable(.{
+        .name = "bufzilla-c-api-smoke",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .use_lld = !no_llvm and target.result.os.tag != .macos,
+        .use_llvm = !no_llvm,
+    });
+    c_api_smoke.root_module.addCSourceFile(.{
+        .file = b.path("test/c_api_smoke.c"),
+        .flags = &.{"-std=c11"},
+    });
+    c_api_smoke.root_module.addIncludePath(b.path("include"));
+    c_api_smoke.root_module.linkLibrary(static_lib);
+    test_step.dependOn(&b.addRunArtifact(c_api_smoke).step);
 
     // Benchmarks
     const benchmark = b.addExecutable(.{
