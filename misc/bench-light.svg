@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="792" viewBox="0 0 900 792" role="img" aria-labelledby="title desc">
+<title id="title">bufzilla vs. other Zig serialization libraries: time per operation</title>
+<desc id="desc">Time to encode, decode every value, and read one field, for one record, 1000 records and a 768-float vector. Lower is better. The same numbers are in the tables below the chart.</desc>
+<style>
+text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: #52514e; }
+.title { font-size: 20px; font-weight: 600; fill: #0b0b0b; }
+.sub { font-size: 13px; }
+.col { font-size: 13px; font-weight: 600; fill: #0b0b0b; }
+.group { font-size: 14px; font-weight: 600; fill: #0b0b0b; }
+.note { font-size: 12px; fill: #898781; }
+.lib { font-size: 13px; }
+.ref { font-weight: 600; fill: #0b0b0b; }
+.val { font-size: 12px; }
+</style>
+<rect x="0.5" y="0.5" width="899" height="791" rx="12" fill="#fcfcfb" stroke="#e1e0d9"/>
+<text class="title" x="28" y="46">bufzilla vs. other Zig serialization libraries</text>
+<text class="sub" x="28" y="70">Time per operation, lower is better. bufzilla's bars show its time; the others, how many times longer they take.</text>
+<rect x="28" y="86" width="12" height="12" rx="3" fill="#2a78d6"/><text class="lib" x="46" y="92" dy="0.35em">bufzilla</text>
+<rect x="124" y="86" width="12" height="12" rx="3" fill="#93928c"/><text class="lib" x="142" y="92" dy="0.35em">other libraries</text>
+<text class="col" x="136.0" y="132">Encode</text>
+<text class="col" x="389.0" y="132">Decode (all values)</text>
+<text class="col" x="642.0" y="132">Read one field</text>
+<text class="group" x="28" y="166.0">One record</text>
+<text class="note" x="642.0" y="166.0">reads <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">address.city</tspan></text>
+<text class="lib ref" x="28" y="192.0" dy="0.35em">bufzilla</text>
+<path d="M136.0 185.0H167.5A4.0 4.0 0 0 1 171.5 189.0V195.0A4.0 4.0 0 0 1 167.5 199.0H136.0Z" fill="#2a78d6"/>
+<text class="val ref" x="177.5" y="192.0" dy="0.35em">65 ns</text>
+<path d="M389.0 185.0H416.3A4.0 4.0 0 0 1 420.3 189.0V195.0A4.0 4.0 0 0 1 416.3 199.0H389.0Z" fill="#2a78d6"/>
+<text class="val ref" x="426.3" y="192.0" dy="0.35em">119 ns</text>
+<path d="M642.0 185.0H652.0A4.0 4.0 0 0 1 656.0 189.0V195.0A4.0 4.0 0 0 1 652.0 199.0H642.0Z" fill="#2a78d6"/>
+<text class="val ref" x="662.0" y="192.0" dy="0.35em">51 ns</text>
+<text class="lib" x="28" y="216.0" dy="0.35em">zbor</text>
+<path d="M136.0 209.0H218.3A4.0 4.0 0 0 1 222.3 213.0V219.0A4.0 4.0 0 0 1 218.3 223.0H136.0Z" fill="#93928c"/>
+<text class="val" x="228.3" y="216.0" dy="0.35em">2.4×</text>
+<path d="M389.0 209.0H516.6A4.0 4.0 0 0 1 520.6 213.0V219.0A4.0 4.0 0 0 1 516.6 223.0H389.0Z" fill="#93928c"/>
+<text class="val" x="526.6" y="216.0" dy="0.35em">4.2×</text>
+<path d="M642.0 209.0H696.2A4.0 4.0 0 0 1 700.2 213.0V219.0A4.0 4.0 0 0 1 696.2 223.0H642.0Z" fill="#93928c"/>
+<text class="val" x="706.2" y="216.0" dy="0.35em">4.2×</text>
+<text class="lib" x="28" y="240.0" dy="0.35em">zig-msgpack</text>
+<path d="M136.0 233.0H207.2A4.0 4.0 0 0 1 211.2 237.0V243.0A4.0 4.0 0 0 1 207.2 247.0H136.0Z" fill="#93928c"/>
+<text class="val" x="217.2" y="240.0" dy="0.35em">2.1×</text>
+<path d="M389.0 233.0H510.4A4.0 4.0 0 0 1 514.4 237.0V243.0A4.0 4.0 0 0 1 510.4 247.0H389.0Z" fill="#93928c"/>
+<text class="val" x="520.4" y="240.0" dy="0.35em">4.0×</text>
+<path d="M642.0 233.0H760.7A4.0 4.0 0 0 1 764.7 237.0V243.0A4.0 4.0 0 0 1 760.7 247.0H642.0Z" fill="#93928c"/>
+<text class="val" x="770.7" y="240.0" dy="0.35em">8.8×</text>
+<text class="lib" x="28" y="264.0" dy="0.35em">zig-protobuf</text>
+<path d="M136.0 257.0H176.6A4.0 4.0 0 0 1 180.6 261.0V267.0A4.0 4.0 0 0 1 176.6 271.0H136.0Z" fill="#93928c"/>
+<text class="val" x="186.6" y="264.0" dy="0.35em">1.3×</text>
+<path d="M389.0 257.0H424.7A4.0 4.0 0 0 1 428.7 261.0V267.0A4.0 4.0 0 0 1 424.7 271.0H389.0Z" fill="#93928c"/>
+<text class="val" x="434.7" y="264.0" dy="0.35em">1.3×</text>
+<path d="M642.0 257.0H667.3A4.0 4.0 0 0 1 671.3 261.0V267.0A4.0 4.0 0 0 1 667.3 271.0H642.0Z" fill="#93928c"/>
+<text class="val" x="677.3" y="264.0" dy="0.35em">2.1×</text>
+<text class="lib" x="28" y="288.0" dy="0.35em">std.json</text>
+<path d="M136.0 281.0H301.0A4.0 4.0 0 0 1 305.0 285.0V291.0A4.0 4.0 0 0 1 301.0 295.0H136.0Z" fill="#93928c"/>
+<text class="val" x="311.0" y="288.0" dy="0.35em">4.8×</text>
+<path d="M389.0 281.0H554.0A4.0 4.0 0 0 1 558.0 285.0V291.0A4.0 4.0 0 0 1 554.0 295.0H389.0Z" fill="#93928c"/>
+<text class="val" x="564.0" y="288.0" dy="0.35em">5.4×</text>
+<path d="M642.0 281.0H807.0A4.0 4.0 0 0 1 811.0 285.0V291.0A4.0 4.0 0 0 1 807.0 295.0H642.0Z" fill="#93928c"/>
+<text class="val" x="817.0" y="288.0" dy="0.35em">12×</text>
+<text class="lib" x="28" y="312.0" dy="0.35em">simdjzon¹</text>
+<text class="val" x="142.0" y="312.0" dy="0.35em" fill="#898781">–</text>
+<path d="M389.0 305.0H471.6A4.0 4.0 0 0 1 475.6 309.0V315.0A4.0 4.0 0 0 1 471.6 319.0H389.0Z" fill="#93928c"/>
+<text class="val" x="481.6" y="312.0" dy="0.35em">2.8×</text>
+<path d="M642.0 305.0H710.6A4.0 4.0 0 0 1 714.6 309.0V315.0A4.0 4.0 0 0 1 710.6 319.0H642.0Z" fill="#93928c"/>
+<text class="val" x="720.6" y="312.0" dy="0.35em">5.2×</text>
+<line x1="135.5" y1="180.0" x2="135.5" y2="324.0" stroke="#c3c2b7"/>
+<line x1="388.5" y1="180.0" x2="388.5" y2="324.0" stroke="#c3c2b7"/>
+<line x1="641.5" y1="180.0" x2="641.5" y2="324.0" stroke="#c3c2b7"/>
+<text class="group" x="28" y="368.0">1000 records</text>
+<text class="note" x="642.0" y="368.0">reads <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">[500].username</tspan></text>
+<text class="lib ref" x="28" y="394.0" dy="0.35em">bufzilla</text>
+<path d="M136.0 387.0H166.0A4.0 4.0 0 0 1 170.0 391.0V397.0A4.0 4.0 0 0 1 166.0 401.0H136.0Z" fill="#2a78d6"/>
+<text class="val ref" x="176.0" y="394.0" dy="0.35em">63.6 µs</text>
+<path d="M389.0 387.0H427.6A4.0 4.0 0 0 1 431.6 391.0V397.0A4.0 4.0 0 0 1 427.6 401.0H389.0Z" fill="#2a78d6"/>
+<text class="val ref" x="437.6" y="394.0" dy="0.35em">165.2 µs</text>
+<path d="M642.0 387.0H647.3A4.0 4.0 0 0 1 651.3 391.0V397.0A4.0 4.0 0 0 1 647.3 401.0H642.0Z" fill="#2a78d6"/>
+<text class="val ref" x="657.3" y="394.0" dy="0.35em">35.0 µs</text>
+<text class="lib" x="28" y="418.0" dy="0.35em">zbor</text>
+<path d="M136.0 411.0H228.5A4.0 4.0 0 0 1 232.5 415.0V421.0A4.0 4.0 0 0 1 228.5 425.0H136.0Z" fill="#93928c"/>
+<text class="val" x="238.5" y="418.0" dy="0.35em">2.8×</text>
+<path d="M389.0 411.0H554.0A4.0 4.0 0 0 1 558.0 415.0V421.0A4.0 4.0 0 0 1 554.0 425.0H389.0Z" fill="#93928c"/>
+<text class="val" x="564.0" y="418.0" dy="0.35em">4.0×</text>
+<path d="M642.0 411.0H679.5A4.0 4.0 0 0 1 683.5 415.0V421.0A4.0 4.0 0 0 1 679.5 425.0H642.0Z" fill="#93928c"/>
+<text class="val" x="689.5" y="418.0" dy="0.35em">4.5×</text>
+<text class="lib" x="28" y="442.0" dy="0.35em">zig-msgpack</text>
+<path d="M136.0 435.0H224.2A4.0 4.0 0 0 1 228.2 439.0V445.0A4.0 4.0 0 0 1 224.2 449.0H136.0Z" fill="#93928c"/>
+<text class="val" x="234.2" y="442.0" dy="0.35em">2.7×</text>
+<path d="M389.0 435.0H511.6A4.0 4.0 0 0 1 515.6 439.0V445.0A4.0 4.0 0 0 1 511.6 449.0H389.0Z" fill="#93928c"/>
+<text class="val" x="521.6" y="442.0" dy="0.35em">3.0×</text>
+<path d="M642.0 435.0H752.4A4.0 4.0 0 0 1 756.4 439.0V445.0A4.0 4.0 0 0 1 752.4 449.0H642.0Z" fill="#93928c"/>
+<text class="val" x="762.4" y="442.0" dy="0.35em">12×</text>
+<text class="lib" x="28" y="466.0" dy="0.35em">zig-protobuf</text>
+<path d="M136.0 459.0H184.8A4.0 4.0 0 0 1 188.8 463.0V469.0A4.0 4.0 0 0 1 184.8 473.0H136.0Z" fill="#93928c"/>
+<text class="val" x="194.8" y="466.0" dy="0.35em">1.6×</text>
+<path d="M389.0 459.0H428.3A4.0 4.0 0 0 1 432.3 463.0V469.0A4.0 4.0 0 0 1 428.3 473.0H389.0Z" fill="#93928c"/>
+<text class="val" x="438.3" y="466.0" dy="0.35em">1.0×</text>
+<path d="M642.0 459.0H643.0A1.0 1.0 0 0 1 644.0 460.0V472.0A1.0 1.0 0 0 1 643.0 473.0H642.0Z" fill="#93928c"/>
+<text class="val" x="650.0" y="466.0" dy="0.35em">0.16×</text>
+<text class="lib" x="28" y="490.0" dy="0.35em">std.json</text>
+<path d="M136.0 483.0H301.0A4.0 4.0 0 0 1 305.0 487.0V493.0A4.0 4.0 0 0 1 301.0 497.0H136.0Z" fill="#93928c"/>
+<text class="val" x="311.0" y="490.0" dy="0.35em">5.0×</text>
+<path d="M389.0 483.0H546.4A4.0 4.0 0 0 1 550.4 487.0V493.0A4.0 4.0 0 0 1 546.4 497.0H389.0Z" fill="#93928c"/>
+<text class="val" x="556.4" y="490.0" dy="0.35em">3.8×</text>
+<path d="M642.0 483.0H807.0A4.0 4.0 0 0 1 811.0 487.0V493.0A4.0 4.0 0 0 1 807.0 497.0H642.0Z" fill="#93928c"/>
+<text class="val" x="817.0" y="490.0" dy="0.35em">18×</text>
+<text class="lib" x="28" y="514.0" dy="0.35em">simdjzon¹</text>
+<text class="val" x="142.0" y="514.0" dy="0.35em" fill="#898781">–</text>
+<path d="M389.0 507.0H467.4A4.0 4.0 0 0 1 471.4 511.0V517.0A4.0 4.0 0 0 1 467.4 521.0H389.0Z" fill="#93928c"/>
+<text class="val" x="477.4" y="514.0" dy="0.35em">1.9×</text>
+<path d="M642.0 507.0H696.8A4.0 4.0 0 0 1 700.8 511.0V517.0A4.0 4.0 0 0 1 696.8 521.0H642.0Z" fill="#93928c"/>
+<text class="val" x="706.8" y="514.0" dy="0.35em">6.3×</text>
+<line x1="135.5" y1="382.0" x2="135.5" y2="526.0" stroke="#c3c2b7"/>
+<line x1="388.5" y1="382.0" x2="388.5" y2="526.0" stroke="#c3c2b7"/>
+<line x1="641.5" y1="382.0" x2="641.5" y2="526.0" stroke="#c3c2b7"/>
+<text class="group" x="28" y="570.0">A 768-float vector embedding</text>
+<text class="note" x="642.0" y="570.0">reads <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">values[700]</tspan></text>
+<text class="lib ref" x="28" y="596.0" dy="0.35em">bufzilla</text>
+<path d="M136.0 589.0H137.0A1.0 1.0 0 0 1 138.0 590.0V602.0A1.0 1.0 0 0 1 137.0 603.0H136.0Z" fill="#2a78d6"/>
+<text class="val ref" x="144.0" y="596.0" dy="0.35em">70 ns</text>
+<path d="M389.0 589.0H390.2A1.2 1.2 0 0 1 391.4 590.2V601.8A1.2 1.2 0 0 1 390.2 603.0H389.0Z" fill="#2a78d6"/>
+<text class="val ref" x="397.4" y="596.0" dy="0.35em">378 ns</text>
+<path d="M642.0 589.0H643.0A1.0 1.0 0 0 1 644.0 590.0V602.0A1.0 1.0 0 0 1 643.0 603.0H642.0Z" fill="#2a78d6"/>
+<text class="val ref" x="650.0" y="596.0" dy="0.35em">24 ns</text>
+<text class="lib" x="28" y="620.0" dy="0.35em">zbor</text>
+<path d="M136.0 613.0H147.8A4.0 4.0 0 0 1 151.8 617.0V623.0A4.0 4.0 0 0 1 147.8 627.0H136.0Z" fill="#93928c"/>
+<text class="val" x="157.8" y="620.0" dy="0.35em">23×</text>
+<path d="M389.0 613.0H468.1A4.0 4.0 0 0 1 472.1 617.0V623.0A4.0 4.0 0 0 1 468.1 627.0H389.0Z" fill="#93928c"/>
+<text class="val" x="478.1" y="620.0" dy="0.35em">35×</text>
+<path d="M642.0 613.0H706.3A4.0 4.0 0 0 1 710.3 617.0V623.0A4.0 4.0 0 0 1 706.3 627.0H642.0Z" fill="#93928c"/>
+<text class="val" x="716.3" y="620.0" dy="0.35em">446×</text>
+<text class="lib" x="28" y="644.0" dy="0.35em">zig-msgpack</text>
+<path d="M136.0 637.0H162.3A4.0 4.0 0 0 1 166.3 641.0V647.0A4.0 4.0 0 0 1 162.3 651.0H136.0Z" fill="#93928c"/>
+<text class="val" x="172.3" y="644.0" dy="0.35em">44×</text>
+<path d="M389.0 637.0H427.1A4.0 4.0 0 0 1 431.1 641.0V647.0A4.0 4.0 0 0 1 427.1 651.0H389.0Z" fill="#93928c"/>
+<text class="val" x="437.1" y="644.0" dy="0.35em">18×</text>
+<path d="M642.0 637.0H672.9A4.0 4.0 0 0 1 676.9 641.0V647.0A4.0 4.0 0 0 1 672.9 651.0H642.0Z" fill="#93928c"/>
+<text class="val" x="682.9" y="644.0" dy="0.35em">229×</text>
+<text class="lib" x="28" y="668.0" dy="0.35em">zig-protobuf</text>
+<path d="M136.0 661.0H153.4A4.0 4.0 0 0 1 157.4 665.0V671.0A4.0 4.0 0 0 1 153.4 675.0H136.0Z" fill="#93928c"/>
+<text class="val" x="163.4" y="668.0" dy="0.35em">31×</text>
+<path d="M389.0 661.0H404.5A4.0 4.0 0 0 1 408.5 665.0V671.0A4.0 4.0 0 0 1 404.5 675.0H389.0Z" fill="#93928c"/>
+<text class="val" x="414.5" y="668.0" dy="0.35em">8.2×</text>
+<path d="M642.0 661.0H653.5A4.0 4.0 0 0 1 657.5 665.0V671.0A4.0 4.0 0 0 1 653.5 675.0H642.0Z" fill="#93928c"/>
+<text class="val" x="663.5" y="668.0" dy="0.35em">102×</text>
+<text class="lib" x="28" y="692.0" dy="0.35em">std.json</text>
+<path d="M136.0 685.0H301.0A4.0 4.0 0 0 1 305.0 689.0V695.0A4.0 4.0 0 0 1 301.0 699.0H136.0Z" fill="#93928c"/>
+<text class="val" x="311.0" y="692.0" dy="0.35em">243×</text>
+<path d="M389.0 685.0H554.0A4.0 4.0 0 0 1 558.0 689.0V695.0A4.0 4.0 0 0 1 554.0 699.0H389.0Z" fill="#93928c"/>
+<text class="val" x="564.0" y="692.0" dy="0.35em">71×</text>
+<path d="M642.0 685.0H807.0A4.0 4.0 0 0 1 811.0 689.0V695.0A4.0 4.0 0 0 1 807.0 699.0H642.0Z" fill="#93928c"/>
+<text class="val" x="817.0" y="692.0" dy="0.35em">1105×</text>
+<text class="lib" x="28" y="716.0" dy="0.35em">simdjzon¹</text>
+<text class="val" x="142.0" y="716.0" dy="0.35em" fill="#898781">–</text>
+<path d="M389.0 709.0H518.7A4.0 4.0 0 0 1 522.7 713.0V719.0A4.0 4.0 0 0 1 518.7 723.0H389.0Z" fill="#93928c"/>
+<text class="val" x="528.7" y="716.0" dy="0.35em">56×</text>
+<path d="M642.0 709.0H762.7A4.0 4.0 0 0 1 766.7 713.0V719.0A4.0 4.0 0 0 1 762.7 723.0H642.0Z" fill="#93928c"/>
+<text class="val" x="772.7" y="716.0" dy="0.35em">815×</text>
+<line x1="135.5" y1="584.0" x2="135.5" y2="728.0" stroke="#c3c2b7"/>
+<line x1="388.5" y1="584.0" x2="388.5" y2="728.0" stroke="#c3c2b7"/>
+<line x1="641.5" y1="584.0" x2="641.5" y2="728.0" stroke="#c3c2b7"/>
+<text class="note" x="28" y="766.0">Apple M4, macOS, Zig 0.17.1 · ReleaseFast · median of 15 samples · bench/compare · ¹ see the notes below the tables</text>
+</svg>

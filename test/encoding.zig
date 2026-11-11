@@ -11,11 +11,3 @@ test "varint encoding" {
     const decoded = Common.decodeVarInt(varint.bytes[0 .. varint.size + 1]);
     try std.testing.expectEqual(512, decoded);
 }
-
-test "zigzag encoding" {
-    const zenc = Common.encodeZigZag(-100);
-    const zdec = Common.decodeZigZag(zenc);
-
-    try std.testing.expectEqual(199, zenc);
-    try std.testing.expectEqual(-100, zdec);
-}

@@ -1,3 +1,73 @@
+# v0.5.0
+
+- Upgrade to Zig 0.17 (minimum Zig version is now `0.17.0`).
+- New wire format: smaller encodings and faster decoding (see below). **Data encoded by earlier versions cannot be read by this version, and the other way around.**
+
+### Wire Format
+- Each item still starts with one tag byte, but the byte is now read as a whole, instead of as a 5-bit type and 3 data bits that most types left unused (only 89 of the 256 byte values had a distinct meaning). The layout is documented on `Common.Tag`.
+  - Unsigned integers 0..63 and signed integers -32..63 are stored in the tag byte (previously 0..7 and -7..7).
+  - Byte strings up to 31 bytes long store their length in the tag byte (previously 7). This covers most object keys.
+  - Byte values 0xFA..0xFF are reserved; readers reject them with `InvalidEnumTag`.
+- On the `bench/compare` datasets, a record shrinks from 215 to 208 bytes and 1000 records from 211,304 to 204,407 bytes (3.3%).
+
+### Breaking Changes
+- Requires Zig 0.17.
+- The wire format changed (see above).
+- `Common.Tag` is now `{ kind: Common.Kind, data: u8 }`. `Common.decodeTag` returns `?Tag` (null for a reserved byte) and `Common.encodeTag` takes a `Common.Kind`. Added `Common.Kind`, `Common.tag_bytes`, and the inline limits `Common.small_uint_max`, `small_int_min`, `small_int_max` and `small_bytes_max`.
+- `Value.smallUint` and `Value.smallIntPositive` hold 0..63, `Value.smallIntNegative` holds magnitudes 1..32, and `Value.smallBytes` holds up to 31 bytes; the C API's `BUFZILLA_VALUE_SMALL_*` values accept the same ranges.
+- Removed `Common.encodeZigZag` / `Common.decodeZigZag` (unused since signed-magnitude varints replaced ZigZag encoding in v0.3.2).
+- Paths have at most `Path.max_segments` (64) segments; longer paths are malformed. `readPath` returns null for them and `applyUpdates` returns `MalformedPath`.
+- `ApplyUpdatesError` has a new `TypeMismatch` error, returned when an update to a typed array element is not a number that fits the element type.
+- Removed `Path.segmentAtDepth`, which re-parsed a path from its start; traversals now track their position with `Path.currentSegment`, `Path.descend` and `Path.ascend`.
+- `Reader.readPaths` resolves every query exactly as `readPath` would: with duplicate keys in the data only the first occurrence is searched, and a typed array root can be indexed.
+- `Inspect` prints number, boolean and null object keys as JSON strings, and returns `InvalidEnumTag` for a typed array key.
+- Removed the internal `PathQuery.orig_index` and `offset` fields: `readPaths` no longer reorders the caller's queries. It resolves up to `read_paths_batch` (256) queries per pass over the data.
+
+### C API
+- Added a C API: `zig build` installs static and dynamic libraries plus `include/bufzilla.h`, which documents every function. The C API never allocates; callers provide writer/reader state, output buffers and scratch memory.
+- Writing: compact `bufzilla_writer_write_{null,bool,int,uint,f64,f32,bytes}`, native-endian `bufzilla_writer_write_typed_array`, and `bufzilla_writer_write_value` for a specific encoding. A failed write leaves the writer unchanged.
+- Reading: `bufzilla_reader_*` for sequential reads, iteration and path queries; a failed read leaves the reader unchanged. `bufzilla_value_as_{int,uint,f64,bytes}` convert a value regardless of its encoding.
+- Writer and reader state are plain data that can be copied to save and restore a position. NULL pointers return `BUFZILLA_INVALID_ARGUMENT`, and scratch memory needs no particular alignment.
+- `bufzilla_version` and `bufzilla_status_string`.
+
+### Safety
+- Fix unbounded output amplification in `Writer.applyUpdates` when extending arrays from untrusted paths: added `ApplyUpdatesLimits` (default `max_array_length` of 1,048,576) and `Writer.applyUpdatesWithLimits`. Exceeding the limit returns `ArrayTooLarge` before padding the rejected array; partial output may already have been written. In the C API, `bufzilla_apply_updates` takes the limit as a parameter.
+- Fix `Writer.applyUpdates` CPU time growing with (array length × number of updates), and (object size × number of updates): a few thousand short paths could take tens of seconds. Updates are now matched to the encoded data in a single sorted pass.
+- Fix `Reader.readPaths` CPU time growing with (entries × queries × path length): every entry rescanned every query and re-parsed each path from its start. It now matches queries to the data in a single sorted pass, like `applyUpdates`, and stops scanning a container once its queries are resolved.
+- Fix `Inspect` stack overflow on deeply nested input: it recursed once per nesting level, so input nested a few hundred levels deep could crash a thread with a small stack. Inspect is now iterative, and supports nesting up to `max_nesting` (65,536) levels.
+- Fix `Inspect` integer overflow with a very large `indent_size`, and a crash with a `float_precision` near `maxInt(usize)`.
+- Fix stack overflow from long paths: path lookups and updates recurse once per path segment, so a path of a few thousand segments could crash a thread. Paths are now limited to 64 segments.
+- Fix `Writer.applyUpdates` silently truncating an update value that does not fit the element type of a typed array (undefined behavior in ReleaseFast). Typed array elements now accept any integer encoding that fits (or, for float elements, any float that does not overflow), and return `TypeMismatch` otherwise, instead of `InvalidEnumTag` or, for values longer than 64 bytes, `WriteFailed`.
+- Harden bounds checks for typed array payload sizes and for fixed-width values in `Reader.skipValue`.
+- `Reader` returns `BytesTooLong` for byte lengths that do not fit in `usize` (e.g. on 32-bit targets).
+
+### Bugfixes
+- Fix `Inspect` emitting nothing for `varIntUnsigned` / `varIntSignedPositive` / `varIntSignedNegative` values.
+- `Writer.applyUpdates`: when several updates target the same path, the last one now always wins. Previously this depended on the number of updates, and several root replacements returned `ConflictingUpdates`.
+- `Reader.readPaths`: a malformed path among the queries could make another query resolve inside the wrong key's value.
+- `Reader.iterateObject`, `readPath` and `readPaths` return `UnexpectedContainerEnd` for an object entry that has a key but no value, instead of returning the container end as its value.
+- The empty path always means the root: an update or query with the empty path was treated as the key `['']` when sorted next to one.
+- `Reader.readPaths` now leaves the reader and the query order unchanged on error, like `readPath`.
+- `Inspect` falls back to full precision for floats that cannot be rendered with `float_precision` digits, instead of printing `(float)`, and returns `InvalidEnumTag` for an object key that is a container.
+- `Writer.writeTypedArray` accepts slices with any alignment.
+
+### Performance
+Measured with A/B benchmarks against the previous code, Apple Silicon, ReleaseFast unless noted:
+- The new wire format and a reader that dispatches on the tag byte with a single jump table (every byte value is its own `switch` case, so varint sizes are compile-time constants in each case). Against v0.4's format and reader, over 8 alternating runs: reading every value of a struct is 15% faster, `Reader.readPath` 29-39% faster, reading objects 2.1-2.3x faster, skipping values 18-48% faster, and scanning a 4 MiB document 2x faster (8.5 to 17 GB/s). Serializing a struct is 14% faster, and objects with many keys up to 42%. Over the 44 micro-benchmarks, the geometric mean time is 0.85x. A few single-value reads measure up to 6% slower in the full suite, but 5-10% faster when measured on their own, which points to code placement rather than the format.
+- Varints (integers, byte string lengths) are written with one fixed-size store when the buffer has room, instead of two copies: writing integers is about 34% faster, and serializing a typical struct about 22% faster.
+- `Reader.readPaths` sorts an index array instead of the queries themselves, and caches each query's current path segment instead of re-parsing paths: 3.2x faster for 3 queries and 4.2x faster for 8 (5x in ReleaseSafe). It also no longer needs a 45 KB stack buffer.
+- `Writer.applyUpdates` sorts up to 16 updates with insertion sort instead of block sort, avoiding a 24 KB stack buffer: about 2x faster for a few updates in ReleaseSafe and Debug builds, where that buffer was filled on every call; unchanged in ReleaseFast.
+- Optimize reader hot paths: fast path for single-byte reads and single-query `Reader.readPaths`, and `Reader.readPath` no longer runs a separate path validation pass.
+
+### Benchmarks
+- Rewrote the benchmark suite: each operation is timed in calibrated batches and reported as the median of 15 samples with its spread, and setup is no longer timed (the object benchmarks used to format keys inside the timed loop). The benchmark programs accept `--csv`, `--quick` and `--filter=<text>`.
+- Added `bench/compare`, comparing bufzilla with zbor, zig-msgpack, zig-protobuf and `std.json` on the same datasets. Checksums verify that every library decodes the complete data.
+- The README's chart is generated from `bench/compare` results by `zig build chart`, which writes light and dark versions (`misc/bench-light.svg`, `misc/bench-dark.svg`) and prints the README's tables, so that both come from the same run. It shows time per operation for each dataset and operation, instead of an average throughput across them.
+- Benchmark output, including `--csv`, goes to stdout.
+
+### Build
+- `-Dno-llvm` is ignored on aarch64 targets, where Zig's self-hosted backend is not ready yet; LLVM is always used there.
+
 # v0.3.2
 
 ### Format Improvements

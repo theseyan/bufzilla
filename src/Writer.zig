@@ -26,6 +26,8 @@ pub const Update = struct {
     ctx: *const anyopaque,
     writeFn: *const fn (writer: *Writer, ctx: *const anyopaque) Error!void,
     applied: bool = false,
+    /// Internal to `applyUpdates`: where the path segment being processed starts in `path`.
+    offset: usize = 0,
 
     /// Creates an update
     pub fn init(path: []const u8, new_value_ptr: anytype) Update {
@@ -48,65 +50,84 @@ pub const Update = struct {
     }
 };
 
+/// Limits applied to the output produced by updates.
+pub const ApplyUpdatesLimits = updates_mod.Limits;
+
 /// Applies a set of updates to an already-encoded object buffer, streaming the new encoding to the current writer
+/// Uses default limits; see `applyUpdatesWithLimits` for explicit limits.
+/// On error, the writer may contain a partial encoding.
 pub fn applyUpdates(self: *Writer, encoded_buf: []const u8, updates: []Update) (Error || reader_mod.Error || updates_mod.Error)!void {
-    try updates_mod.applyUpdates(Writer, self, encoded_buf, updates);
+    try updates_mod.applyUpdates(Writer, self, encoded_buf, updates, .{});
+}
+
+/// Applies a set of updates to an already-encoded object buffer, streaming the new encoding to the current writer,
+/// with explicit limits for the output produced by updates.
+/// On error, the writer may contain a partial encoding.
+pub fn applyUpdatesWithLimits(self: *Writer, encoded_buf: []const u8, updates: []Update, limits: ApplyUpdatesLimits) (Error || reader_mod.Error || updates_mod.Error)!void {
+    try updates_mod.applyUpdates(Writer, self, encoded_buf, updates, limits);
+}
+
+/// Writes a tag byte followed by a varint. When the buffer has room for the longest varint, all of it
+/// is stored at once and only the used length is kept, instead of copying a variable length.
+inline fn writeTagAndVarInt(w: *Io.Writer, tag_byte: u8, varint: anytype) Error!void {
+    const len = @as(usize, varint.size) + 1;
+    const free = w.unusedCapacitySlice();
+    if (free.len >= 1 + varint.bytes.len) {
+        free[0] = tag_byte;
+        free[1..][0..varint.bytes.len].* = varint.bytes;
+        w.advance(1 + len);
+        return;
+    }
+    try w.writeByte(tag_byte);
+    try w.writeAll(varint.bytes[0..len]);
 }
 
 /// Writes a single data item to the underlying writer
-pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(common.Value)) Error!void {
+pub fn write(self: *Writer, data: common.Value, comptime tag: common.Kind) Error!void {
     const w = self.raw;
 
     switch (comptime tag) {
-        .smallIntPositive => {
-            std.debug.assert(data.smallIntPositive <= 7);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntPositive));
-            try w.writeByte(tag_byte);
-        },
-        .smallIntNegative => {
-            std.debug.assert(data.smallIntNegative > 0 and data.smallIntNegative <= 7);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallIntNegative));
-            try w.writeByte(tag_byte);
-        },
-        .smallUint => {
-            std.debug.assert(data.smallUint <= 7);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallUint));
-            try w.writeByte(tag_byte);
-        },
+        .smallIntPositive => try w.writeByte(common.encodeTag(.smallIntPositive, data.smallIntPositive)),
+        .smallIntNegative => try w.writeByte(common.encodeTag(.smallIntNegative, data.smallIntNegative)),
+        .smallUint => try w.writeByte(common.encodeTag(.smallUint, data.smallUint)),
         .varIntUnsigned => {
             const varint = common.encodeVarInt(data.varIntUnsigned);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            const tag_byte: u8 = common.encodeTag(.varIntUnsigned, varint.size);
+            try writeTagAndVarInt(w, tag_byte, varint);
         },
         .varIntSignedPositive => {
             const magnitude: u64 = @intCast(data.varIntSignedPositive);
             const varint = common.encodeVarInt(magnitude);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            const tag_byte: u8 = common.encodeTag(.varIntSignedPositive, varint.size);
+            try writeTagAndVarInt(w, tag_byte, varint);
         },
         .varIntSignedNegative => {
             const signed = data.varIntSignedNegative;
             std.debug.assert(signed < 0);
             const magnitude: u64 = if (signed == std.math.minInt(i64)) (@as(u64, 1) << 63) else @intCast(-signed);
             const varint = common.encodeVarInt(magnitude);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            const tag_byte: u8 = common.encodeTag(.varIntSignedNegative, varint.size);
+            try writeTagAndVarInt(w, tag_byte, varint);
         },
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            const tag_byte: u8 = common.encodeTag(.varIntBytes, varint.size);
+            try writeTagAndVarInt(w, tag_byte, varint);
             try w.writeAll(data.varIntBytes);
         },
         .smallBytes => {
-            std.debug.assert(data.smallBytes.len <= 7);
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), @truncate(data.smallBytes.len));
+            const bytes = data.smallBytes;
+            std.debug.assert(bytes.len <= common.small_bytes_max);
+            const tag_byte = common.encodeTag(.smallBytes, @intCast(bytes.len));
+            const free = w.unusedCapacitySlice();
+            if (free.len > bytes.len) {
+                free[0] = tag_byte;
+                @memcpy(free[1..][0..bytes.len], bytes);
+                w.advance(1 + bytes.len);
+                return;
+            }
             try w.writeByte(tag_byte);
-            try w.writeAll(data.smallBytes);
+            try w.writeAll(bytes);
         },
         .typedArray => {
             const ta = data.typedArray;
@@ -114,18 +135,15 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             const expected_len = std.math.mul(usize, ta.count, elem_size) catch @panic("bufzilla: typedArray payload length overflow");
             std.debug.assert(expected_len == ta.bytes.len);
             const count_varint = common.encodeVarInt(@intCast(ta.count));
-            const tag_byte: u8 = common.encodeTag(@intFromEnum(data), count_varint.size);
+            const tag_byte: u8 = common.encodeTag(.typedArray, count_varint.size);
             try w.writeByte(tag_byte);
-            try w.writeByte(@intFromEnum(ta.elem));
+            try w.writeByte(@backingInt(ta.elem));
             try w.writeAll(count_varint.bytes[0 .. @as(usize, count_varint.size) + 1]);
             try w.writeAll(ta.bytes);
         },
-        .bool => {
-            const val = @intFromBool(data.bool);
-            try w.writeByte(common.encodeTag(@intFromEnum(data), val));
-        },
+        .bool => try w.writeByte(common.encodeTag(.bool, @intFromBool(data.bool))),
         else => {
-            try w.writeByte(common.encodeTag(@intFromEnum(data), 0));
+            try w.writeByte(comptime common.encodeTag(tag, 0));
 
             switch (comptime tag) {
                 .u64 => try w.writeInt(u64, data.u64, .little),
@@ -173,7 +191,7 @@ pub fn writeTypedArray(self: *Writer, values: anytype) Error!void {
     }
 }
 
-fn writeTypedArraySlice(self: *Writer, comptime ElemT: type, slice: []const ElemT) Error!void {
+fn writeTypedArraySlice(self: *Writer, comptime ElemT: type, slice: []align(1) const ElemT) Error!void {
     const elem: common.TypedArrayElem = comptime blk: {
         const maybe = common.typedArrayElemFromType(ElemT);
         if (maybe == null) @compileError("bufzilla: writeTypedArray unsupported element type: " ++ @typeName(ElemT));
@@ -182,13 +200,13 @@ fn writeTypedArraySlice(self: *Writer, comptime ElemT: type, slice: []const Elem
     try writeTypedArraySliceWithElem(self, ElemT, elem, slice);
 }
 
-fn writeTypedArraySliceWithElem(self: *Writer, comptime ElemT: type, comptime elem: common.TypedArrayElem, slice: []const ElemT) Error!void {
+fn writeTypedArraySliceWithElem(self: *Writer, comptime ElemT: type, comptime elem: common.TypedArrayElem, slice: []align(1) const ElemT) Error!void {
     const count: usize = slice.len;
     const count_varint = common.encodeVarInt(@intCast(count));
-    const tag_byte: u8 = common.encodeTag(@intFromEnum(common.Value.typedArray), count_varint.size);
+    const tag_byte: u8 = common.encodeTag(.typedArray, count_varint.size);
 
     try self.raw.writeByte(tag_byte);
-    try self.raw.writeByte(@intFromEnum(elem));
+    try self.raw.writeByte(@backingInt(elem));
     try self.raw.writeAll(count_varint.bytes[0 .. @as(usize, count_varint.size) + 1]);
 
     if (count == 0) return;
@@ -227,7 +245,7 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .comptime_float => try self.writeAnyExplicit(f64, @floatCast(data)),
         .int => switch (T) {
             u64 => {
-                if (data <= 7) {
+                if (data <= common.small_uint_max) {
                     try self.write(common.Value{ .smallUint = @intCast(data) }, .smallUint);
                 } else {
                     try self.write(common.Value{ .varIntUnsigned = data }, .varIntUnsigned);
@@ -237,10 +255,8 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
             u16 => try self.writeAnyExplicit(u64, data),
             u8 => try self.writeAnyExplicit(u64, data),
             i64 => {
-                if (data >= 0 and data <= 7) {
-                    try self.write(common.Value{ .smallIntPositive = @intCast(data) }, .smallIntPositive);
-                } else if (data < 0 and data >= -7) {
-                    try self.write(common.Value{ .smallIntNegative = @intCast(-data) }, .smallIntNegative);
+                if (data >= common.small_int_min and data <= common.small_int_max) {
+                    try self.raw.writeByte(common.smallIntTag(data));
                 } else if (data >= 0) {
                     try self.write(common.Value{ .varIntSignedPositive = data }, .varIntSignedPositive);
                 } else {
@@ -270,7 +286,7 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .pointer => |ptr_info| {
             if (ptr_info.size == .slice and ptr_info.child == u8) {
                 // u8 slice (string)
-                if (data.len <= 7) {
+                if (data.len <= common.small_bytes_max) {
                     try self.write(common.Value{ .smallBytes = data }, .smallBytes);
                 } else {
                     try self.write(common.Value{ .varIntBytes = data }, .varIntBytes);
@@ -289,7 +305,7 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
                         if (arr.child == u8) {
                             // pointer to byte array - write as bytes
                             const slice: []const u8 = data;
-                            if (slice.len <= 7) {
+                            if (slice.len <= common.small_bytes_max) {
                                 try self.write(common.Value{ .smallBytes = slice }, .smallBytes);
                             } else {
                                 try self.write(common.Value{ .varIntBytes = slice }, .varIntBytes);
@@ -314,35 +330,35 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         },
         .@"struct" => |struct_info| {
             try self.startObject();
-            inline for (struct_info.fields) |field| {
+            inline for (struct_info.field_names) |field_name| {
                 // Precompute encoded key prefix
                 const key_prefix = comptime blk: {
-                    if (field.name.len <= 7) {
-                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.smallBytes), @truncate(field.name.len));
-                        var prefix: [1 + field.name.len]u8 = undefined;
+                    if (field_name.len <= common.small_bytes_max) {
+                        const tag_byte = common.encodeTag(.smallBytes, field_name.len);
+                        var prefix: [1 + field_name.len]u8 = undefined;
                         prefix[0] = tag_byte;
-                        for (0..field.name.len) |i| {
-                            prefix[1 + i] = field.name[i];
+                        for (0..field_name.len) |i| {
+                            prefix[1 + i] = field_name[i];
                         }
-                        break :blk prefix[0 .. 1 + field.name.len].*;
+                        break :blk prefix[0 .. 1 + field_name.len].*;
                     } else {
-                        const varint = common.encodeVarInt(field.name.len);
-                        const tag_byte = common.encodeTag(@intFromEnum(common.Value.varIntBytes), varint.size);
+                        const varint = common.encodeVarInt(field_name.len);
+                        const tag_byte = common.encodeTag(.varIntBytes, varint.size);
                         const len_size: usize = @as(usize, varint.size) + 1;
-                        var prefix: [1 + 8 + field.name.len]u8 = undefined;
+                        var prefix: [1 + 8 + field_name.len]u8 = undefined;
                         prefix[0] = tag_byte;
                         for (0..len_size) |i| {
                             prefix[1 + i] = varint.bytes[i];
                         }
                         // Include the field name in the prefix
-                        for (0..field.name.len) |i| {
-                            prefix[1 + len_size + i] = field.name[i];
+                        for (0..field_name.len) |i| {
+                            prefix[1 + len_size + i] = field_name[i];
                         }
-                        break :blk prefix[0 .. 1 + len_size + field.name.len].*;
+                        break :blk prefix[0 .. 1 + len_size + field_name.len].*;
                     }
                 };
                 try self.raw.writeAll(&key_prefix);
-                const val = @field(data, field.name);
+                const val = @field(data, field_name);
                 try self.writeAnyExplicit(@TypeOf(val), val);
             }
             try self.endContainer();
@@ -365,10 +381,10 @@ pub fn writeAnyExplicit(self: *Writer, comptime T: type, data: T) Error!void {
         .@"union" => |union_info| {
             if (union_info.tag_type) |TT| {
                 const tag: TT = data;
-                inline for (union_info.fields) |field| {
-                    const field_tag = @field(TT, field.name);
+                inline for (union_info.field_names) |field_name| {
+                    const field_tag = @field(TT, field_name);
                     if (field_tag == tag) {
-                        const field_value = @field(data, field.name);
+                        const field_value = @field(data, field_name);
                         try self.writeAnyExplicit(@TypeOf(field_value), field_value);
                         break;
                     }
