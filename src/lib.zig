@@ -9,6 +9,7 @@ pub const ReadLimits = reader_mod.ReadLimits;
 pub const ReadError = reader_mod.Error;
 pub const KeyValuePair = reader_mod.KeyValuePair;
 pub const PathQuery = reader_mod.PathQuery;
+pub const read_paths_batch = reader_mod.read_paths_batch;
 
 const inspect_mod = @import("Inspect.zig");
 pub const Inspect = inspect_mod.Inspect;

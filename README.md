@@ -267,7 +267,7 @@ const missing = try reader.readPath("nonexistent.path"); // null
 
 Paths have at most 64 segments (`bufzilla.Path.max_segments`); longer paths are treated as malformed. This bounds the stack used by path lookups and updates, which recurse once per segment.
 
-For reading many paths efficiently, use `readPaths` to scan the buffer once:
+For reading many paths efficiently, use `readPaths` to scan the buffer once (per 256 queries):
 
 ```zig
 var queries = [_]bufzilla.PathQuery{

@@ -10,6 +10,7 @@
 - Removed `Path.segmentAtDepth`, which re-parsed a path from its start; traversals now track their position with `Path.currentSegment`, `Path.descend` and `Path.ascend`.
 - `Reader.readPaths` resolves every query exactly as `readPath` would: with duplicate keys in the data only the first occurrence is searched, and a typed array root can be indexed.
 - `Inspect` prints number, boolean and null object keys as JSON strings, and returns `InvalidEnumTag` for a typed array key.
+- Removed the internal `PathQuery.orig_index` and `offset` fields: `readPaths` no longer reorders the caller's queries. It resolves up to `read_paths_batch` (256) queries per pass over the data.
 
 ### C API
 - Added a C API: `zig build` installs static and dynamic libraries plus `include/bufzilla.h`, which documents every function. The C API never allocates; callers provide writer/reader state, output buffers and scratch memory.
@@ -40,6 +41,10 @@
 - `Writer.writeTypedArray` accepts slices with any alignment.
 
 ### Performance
+Measured with A/B benchmarks against the previous code, Apple Silicon, ReleaseFast unless noted:
+- Varints (integers, byte string lengths) are written with one fixed-size store when the buffer has room, instead of two copies: writing integers is about 34% faster, and serializing a typical struct about 22% faster.
+- `Reader.readPaths` sorts an index array instead of the queries themselves, and caches each query's current path segment instead of re-parsing paths: 3.2x faster for 3 queries and 4.2x faster for 8 (5x in ReleaseSafe). It also no longer needs a 45 KB stack buffer.
+- `Writer.applyUpdates` sorts up to 16 updates with insertion sort instead of block sort, avoiding a 24 KB stack buffer: about 2x faster for a few updates in ReleaseSafe and Debug builds, where that buffer was filled on every call; unchanged in ReleaseFast.
 - Optimize reader hot paths: fast path for single-byte reads and single-query `Reader.readPaths`, and `Reader.readPath` no longer runs a separate path validation pass.
 
 ### Build

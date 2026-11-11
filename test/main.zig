@@ -2648,6 +2648,30 @@ test "readPaths: agrees with readPath on duplicate keys and typed array roots" {
     try std.testing.expectEqual(@as(?Value, null), ta_queries[2].value);
 }
 
+test "readPaths: more queries than one batch" {
+    var buffer: [2048]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.startObject();
+    var key_buf: [16]u8 = undefined;
+    for (0..100) |i| {
+        try writer.writeAny(try std.mem.print(&key_buf, "k{d}", .{i}));
+        try writer.writeAny(@as(i64, @intCast(i)));
+    }
+    try writer.endContainer();
+
+    // Two and a half batches; keys 100 to 119 are missing.
+    const count = 2 * bufzilla.read_paths_batch + 100;
+    var path_bufs: [count][16]u8 = undefined;
+    var queries: [count]bufzilla.PathQuery = undefined;
+    for (&queries, &path_bufs, 0..) |*query, *path_buf, i| {
+        query.* = .{ .path = try std.mem.print(path_buf, "k{d}", .{(i * 7) % 120}) };
+    }
+    var reader = Reader(.{}).init(fixed.buffered());
+    try reader.readPaths(&queries);
+    for (queries) |query| try std.testing.expectEqual(try reader.readPath(query.path), query.value);
+}
+
 test "readPaths: many queries over a large object take linear time" {
     // Previously every entry rescanned every query: 2000 queries x 20000 entries.
     const entries = 20_000;

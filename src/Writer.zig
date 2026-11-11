@@ -67,6 +67,21 @@ pub fn applyUpdatesWithLimits(self: *Writer, encoded_buf: []const u8, updates: [
     try updates_mod.applyUpdates(Writer, self, encoded_buf, updates, limits);
 }
 
+/// Writes a tag byte followed by a varint. When the buffer has room for the longest varint, all of it
+/// is stored at once and only the used length is kept, instead of copying a variable length.
+inline fn writeTagAndVarInt(w: *Io.Writer, tag_byte: u8, varint: anytype) Error!void {
+    const len = @as(usize, varint.size) + 1;
+    const free = w.unusedCapacitySlice();
+    if (free.len >= 1 + varint.bytes.len) {
+        free[0] = tag_byte;
+        free[1..][0..varint.bytes.len].* = varint.bytes;
+        w.advance(1 + len);
+        return;
+    }
+    try w.writeByte(tag_byte);
+    try w.writeAll(varint.bytes[0..len]);
+}
+
 /// Writes a single data item to the underlying writer
 pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(common.Value)) Error!void {
     const w = self.raw;
@@ -90,15 +105,13 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
         .varIntUnsigned => {
             const varint = common.encodeVarInt(data.varIntUnsigned);
             const tag_byte: u8 = common.encodeTag(@backingInt(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            try writeTagAndVarInt(w, tag_byte, varint);
         },
         .varIntSignedPositive => {
             const magnitude: u64 = @intCast(data.varIntSignedPositive);
             const varint = common.encodeVarInt(magnitude);
             const tag_byte: u8 = common.encodeTag(@backingInt(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            try writeTagAndVarInt(w, tag_byte, varint);
         },
         .varIntSignedNegative => {
             const signed = data.varIntSignedNegative;
@@ -106,14 +119,12 @@ pub fn write(self: *Writer, data: common.Value, comptime tag: std.meta.Tag(commo
             const magnitude: u64 = if (signed == std.math.minInt(i64)) (@as(u64, 1) << 63) else @intCast(-signed);
             const varint = common.encodeVarInt(magnitude);
             const tag_byte: u8 = common.encodeTag(@backingInt(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            try writeTagAndVarInt(w, tag_byte, varint);
         },
         .varIntBytes => {
             const varint = common.encodeVarInt(data.varIntBytes.len);
             const tag_byte: u8 = common.encodeTag(@backingInt(data), varint.size);
-            try w.writeByte(tag_byte);
-            try w.writeAll(varint.bytes[0 .. @as(usize, varint.size) + 1]);
+            try writeTagAndVarInt(w, tag_byte, varint);
             try w.writeAll(data.varIntBytes);
         },
         .smallBytes => {

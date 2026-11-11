@@ -210,7 +210,12 @@ pub fn applyUpdates(comptime WriterT: type, writer: *WriterT, encoded_buf: []con
             return path.lessThanPathSegments(lhs.path, rhs.path);
         }
     };
-    std.mem.sort(UpdateT, updates, {}, Less.lt);
+    // For few updates, insertion sort (also stable) avoids the block sort's large buffer.
+    if (updates.len <= 16) {
+        std.sort.insertion(UpdateT, updates, {}, Less.lt);
+    } else {
+        std.mem.sort(UpdateT, updates, {}, Less.lt);
+    }
 
     // Root replacements (empty paths) sort first. They replace the whole document, so they cannot be
     // combined with other updates; of several, the last wins.

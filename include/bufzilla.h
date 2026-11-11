@@ -309,7 +309,8 @@ typedef struct {
  * queries, or SIZE_MAX if that overflows. */
 size_t bufzilla_reader_read_paths_scratch_size(size_t query_count);
 
-/* Looks up several paths in one pass over the input, like read_path for each.
+/* Looks up several paths in one pass over the input (per 256 queries), like
+ * read_path for each.
  * scratch need not be aligned; it may be NULL when query_count is 0. On error,
  * the queries are left unchanged. */
 bufzilla_status bufzilla_reader_read_paths(bufzilla_reader *reader, bufzilla_path_query *queries, size_t query_count, void *scratch, size_t scratch_size);

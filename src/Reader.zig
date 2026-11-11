@@ -36,11 +36,12 @@ pub const PathQuery = struct {
     value: ?common.Value = null,
     /// Internal to `readPaths`.
     resolved: bool = false,
-    /// Internal to `readPaths`: the query's position in the caller's slice.
-    orig_index: usize = 0,
-    /// Internal to `readPaths`: where the path segment being processed starts in `path`.
-    offset: usize = 0,
+    /// Internal to `readPaths`: the path segment being processed.
+    segment: path.Segment = undefined,
 };
+
+/// `readPaths` resolves this many queries per pass over the data. Bounds the stack it uses.
+pub const read_paths_batch = 256;
 
 /// Error type for read operations.
 pub const Error = error{ UnexpectedEof, InvalidEnumTag, InvalidSignedMagnitude, UnexpectedContainerEnd, MaxDepthExceeded, BytesTooLong, ArrayTooLarge, ObjectTooLarge };
@@ -486,28 +487,32 @@ pub fn Reader(comptime limits: ReadLimits) type {
             return value;
         }
 
-        fn lessThanByIndex(_: void, lhs: PathQuery, rhs: PathQuery) bool {
-            return lhs.orig_index < rhs.orig_index;
+        /// Orders query indices by their current segment: keys (by bytes) before indices (by value),
+        /// and, for the same key or index, queries ending at this segment before those looking deeper.
+        fn lessThanBySegment(queries: []const PathQuery, lhs: u16, rhs: u16) bool {
+            const a = &queries[lhs].segment;
+            const b = &queries[rhs].segment;
+            if (a.is_index != b.is_index) return !a.is_index;
+            if (a.is_index) {
+                if (a.index != b.index) return a.index < b.index;
+            } else switch (std.mem.order(u8, a.key, b.key)) {
+                .lt => return true,
+                .gt => return false,
+                .eq => {},
+            }
+            return a.rest.len == 0 and b.rest.len != 0;
         }
 
-        /// Valid paths grouped by segments, so that at every level the queries addressing one key or
-        /// index are contiguous, followed by malformed paths (already resolved).
-        fn lessThanBySegments(_: void, lhs: PathQuery, rhs: PathQuery) bool {
-            if (lhs.resolved or rhs.resolved) return !lhs.resolved and rhs.resolved;
-            return path.lessThanPathSegments(lhs.path, rhs.path);
-        }
-
-        /// Reads multiple paths from the buffer in a single pass.
+        /// Reads multiple paths from the buffer in a single pass (per `read_paths_batch` queries).
         /// Each query's `value` is set to what `readPath` would return for its path: the found Value,
-        /// or null if the path does not exist or is malformed.
+        /// or null if the path does not exist or is malformed. Queries are not reordered.
         /// Like `readPath`, this does not move the reader, even on error.
-        /// On error, queries keep their order but their values are unspecified.
+        /// On error, query values are unspecified.
         pub fn readPaths(self: *Self, queries: []PathQuery) Error!void {
             if (queries.len == 0) return;
             if (queries.len == 1) {
                 queries[0].value = try self.readPath(queries[0].path);
                 queries[0].resolved = true;
-                queries[0].orig_index = 0;
                 return;
             }
 
@@ -519,35 +524,48 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 self.depth = saved_depth;
                 self.iteration_counts = saved_counts;
             }
-            // Queries are sorted while being resolved; put them back in caller order.
-            defer std.mem.sort(PathQuery, queries, {}, lessThanByIndex);
 
+            var start: usize = 0;
+            while (start < queries.len) : (start += read_paths_batch) {
+                try self.readPathsBatch(queries[start..@min(start + read_paths_batch, queries.len)]);
+            }
+        }
+
+        fn readPathsBatch(self: *Self, queries: []PathQuery) Error!void {
+            std.debug.assert(queries.len <= read_paths_batch);
             self.pos = 0;
             self.depth = 0;
             self.iteration_counts = @splat(0);
 
+            // The traversal works on indices of the queries, which are cheap to sort and leave the
+            // caller's queries in place. Empty paths (the root) are resolved directly.
+            var order_buf: [read_paths_batch]u16 = undefined;
+            var count: usize = 0;
             var remaining: usize = 0;
             for (queries, 0..) |*q, i| {
-                q.* = .{ .path = q.path, .orig_index = i };
-                if (path.validate(q.path)) remaining += 1 else q.resolved = true;
+                q.value = null;
+                q.resolved = !path.validate(q.path);
+                if (q.resolved) continue;
+                remaining += 1;
+                if (q.path.len == 0) continue;
+                q.segment = path.parseSegment(q.path) orelse unreachable; // validated
+                order_buf[count] = @intCast(i);
+                count += 1;
             }
-
-            std.sort.pdq(PathQuery, queries, {}, lessThanBySegments);
-            const valid = queries[0..remaining];
 
             // Read even if every path is malformed: `readPath` reads the root first, too.
             const root = try self.read();
-            // Empty paths address the root itself; they sort first.
-            var first: usize = 0;
-            while (first < valid.len and valid[first].path.len == 0) : (first += 1) resolveQuery(&valid[first], root, &remaining);
-            try self.resolveIn(root, valid[first..], &remaining, 0);
+            for (queries) |*q| {
+                if (!q.resolved and q.path.len == 0) resolveQuery(q, root, &remaining);
+            }
+            try self.resolveIn(root, queries, order_buf[0..count], &remaining, 0);
         }
 
-        // Path queries are resolved in one pass over the data. At each container, the queries whose
-        // current segment addresses its contents are a sorted, contiguous slice: object entries find
-        // theirs by binary search, array elements by a cursor. Each query's `offset` marks its current
-        // segment (see `path.descend`). A container's scan stops once its own queries are resolved, so
-        // it reads exactly as far as `readPath` would for the furthest of them.
+        // Path queries are resolved in one pass over the data. Each query caches the segment of its
+        // path being processed. At each container, the queries addressing its contents are a slice
+        // of indices, sorted by that segment: object entries find theirs by binary search, array
+        // elements by a cursor. A container's scan stops once its own queries are resolved, so it
+        // reads exactly as far as `readPath` would for the furthest of them.
 
         fn resolveQuery(query: *PathQuery, value: ?common.Value, remaining: *usize) void {
             query.value = value;
@@ -555,32 +573,40 @@ pub fn Reader(comptime limits: ReadLimits) type {
             remaining.* -= 1;
         }
 
-        /// Resolves `queries`, whose current segments (at path depth `depth`) address the contents
-        /// of `value`, which was just read. Unless no queries remain at all, this leaves the reader
-        /// after `value`.
-        fn resolveIn(self: *Self, value: common.Value, queries: []PathQuery, remaining: *usize, depth: usize) Error!void {
-            switch (value) {
-                .object => try self.resolveInObject(queries, remaining, depth),
-                .array => try self.resolveInArray(queries, remaining, depth),
-                .typedArray => |ta| for (queries) |*q| resolveQuery(q, typedArrayElementAt(ta, q), remaining),
-                else => for (queries) |*q| resolveQuery(q, null, remaining),
+        fn resolveAll(queries: []PathQuery, order: []const u16, value: ?common.Value, remaining: *usize) void {
+            for (order) |i| {
+                if (!queries[i].resolved) resolveQuery(&queries[i], value, remaining);
             }
         }
 
-        fn typedArrayElementAt(ta: common.TypedArray, query: *const PathQuery) ?common.Value {
-            const seg = path.currentSegment(query) orelse return null;
+        /// Resolves the queries `order` refers to, whose current segments (at path depth `depth`)
+        /// address the contents of `value`, which was just read. Unless no queries remain at all,
+        /// this leaves the reader after `value`.
+        fn resolveIn(self: *Self, value: common.Value, queries: []PathQuery, order: []u16, remaining: *usize, depth: usize) Error!void {
+            switch (value) {
+                .object, .array => {
+                    std.sort.pdq(u16, order, @as([]const PathQuery, queries), lessThanBySegment);
+                    if (value == .object) {
+                        try self.resolveInObject(queries, order, remaining, depth);
+                    } else {
+                        try self.resolveInArray(queries, order, remaining, depth);
+                    }
+                },
+                .typedArray => |ta| for (order) |i| resolveQuery(&queries[i], typedArrayElementAt(ta, queries[i].segment), remaining),
+                else => resolveAll(queries, order, null, remaining),
+            }
+        }
+
+        fn typedArrayElementAt(ta: common.TypedArray, seg: path.Segment) ?common.Value {
             if (!seg.is_index or seg.index >= ta.count or seg.rest.len != 0) return null;
             return common.typedArrayElementToValue(ta, seg.index) catch null;
         }
 
-        fn resolveInObject(self: *Self, queries: []PathQuery, remaining: *usize, depth: usize) Error!void {
+        fn resolveInObject(self: *Self, queries: []PathQuery, order: []u16, remaining: *usize, depth: usize) Error!void {
             // Keys sort before indices, and an index cannot match in an object.
             var keyed: usize = 0;
-            while (keyed < queries.len) : (keyed += 1) {
-                const seg = path.currentSegment(&queries[keyed]) orelse break;
-                if (seg.is_index) break;
-            }
-            for (queries[keyed..]) |*q| resolveQuery(q, null, remaining);
+            while (keyed < order.len and !queries[order[keyed]].segment.is_index) keyed += 1;
+            resolveAll(queries, order[keyed..], null, remaining);
 
             var pending = keyed;
             var entries: usize = 0;
@@ -602,55 +628,45 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     continue;
                 }
                 const key = try self.readBytesSlice();
-                const run = pendingKeyRun(queries[0..keyed], key) orelse {
+                const run = pendingKeyRun(queries, order[0..keyed], key) orelse {
                     try self.skipValue();
                     continue;
                 };
                 pending -= run.len;
-                try self.resolveEntry(run, remaining, depth);
+                try self.resolveEntry(queries, run, remaining, depth);
             }
 
             _ = try self.read();
-            for (queries[0..keyed]) |*q| {
-                if (!q.resolved) resolveQuery(q, null, remaining);
-            }
+            resolveAll(queries, order[0..keyed], null, remaining);
         }
 
         /// The unresolved queries whose current segment is the key `key`, found by binary search.
         /// Null if there are none: a run is resolved as a whole by the first entry with its key, as
         /// in `readPath`.
-        fn pendingKeyRun(queries: []PathQuery, key: []const u8) ?[]PathQuery {
+        fn pendingKeyRun(queries: []const PathQuery, order: []u16, key: []const u8) ?[]u16 {
             var lo: usize = 0;
-            var hi: usize = queries.len;
+            var hi: usize = order.len;
             while (lo < hi) {
                 const mid = lo + (hi - lo) / 2;
-                if (std.mem.order(u8, segmentKey(&queries[mid]), key) == .lt) lo = mid + 1 else hi = mid;
+                if (std.mem.order(u8, queries[order[mid]].segment.key, key) == .lt) lo = mid + 1 else hi = mid;
             }
-            if (lo == queries.len or queries[lo].resolved) return null;
+            if (lo == order.len or queries[order[lo]].resolved) return null;
             var end = lo;
-            while (end < queries.len and std.mem.eql(u8, segmentKey(&queries[end]), key)) end += 1;
-            return if (end == lo) null else queries[lo..end];
+            while (end < order.len and std.mem.eql(u8, queries[order[end]].segment.key, key)) end += 1;
+            return if (end == lo) null else order[lo..end];
         }
 
-        fn segmentKey(query: *const PathQuery) []const u8 {
-            return if (path.currentSegment(query)) |seg| seg.key else "";
-        }
-
-        fn resolveInArray(self: *Self, queries: []PathQuery, remaining: *usize, depth: usize) Error!void {
+        fn resolveInArray(self: *Self, queries: []PathQuery, order: []u16, remaining: *usize, depth: usize) Error!void {
             // Keys sort before indices, and a key cannot match in an array.
             var cursor: usize = 0;
-            while (cursor < queries.len) : (cursor += 1) {
-                const seg = path.currentSegment(&queries[cursor]) orelse break;
-                if (seg.is_index) break;
-            }
-            for (queries[0..cursor]) |*q| resolveQuery(q, null, remaining);
+            while (cursor < order.len and !queries[order[cursor]].segment.is_index) cursor += 1;
+            resolveAll(queries, order[0..cursor], null, remaining);
 
-            // Queries are sorted by index; the cursor's index is parsed once per query.
-            var cursor_index = indexAt(queries, cursor);
             var idx: usize = 0;
             while (true) {
                 if (remaining.* == 0) return;
-                const target = cursor_index orelse return self.skipRestOfContainer();
+                if (cursor == order.len) return self.skipRestOfContainer();
+                const target = queries[order[cursor]].segment.index;
 
                 const peek = try self.peekTag();
                 if (peek.tag == .containerEnd) break;
@@ -660,11 +676,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
                 if (idx == target) {
                     const start = cursor;
-                    while (cursor_index != null and cursor_index.? == idx) {
-                        cursor += 1;
-                        cursor_index = indexAt(queries, cursor);
-                    }
-                    try self.resolveEntry(queries[start..cursor], remaining, depth);
+                    while (cursor < order.len and queries[order[cursor]].segment.index == idx) cursor += 1;
+                    try self.resolveEntry(queries, order[start..cursor], remaining, depth);
                 } else {
                     try self.skipValue();
                 }
@@ -672,26 +685,18 @@ pub fn Reader(comptime limits: ReadLimits) type {
             }
 
             _ = try self.read();
-            for (queries[cursor..]) |*q| resolveQuery(q, null, remaining);
-        }
-
-        fn indexAt(queries: []PathQuery, i: usize) ?usize {
-            if (i == queries.len) return null;
-            return (path.currentSegment(&queries[i]) orelse return null).index;
+            resolveAll(queries, order[cursor..], null, remaining);
         }
 
         /// Reads the value of one container entry and resolves the queries addressing it. Queries
         /// ending at this segment sort first and get the value itself; the rest look inside it.
-        fn resolveEntry(self: *Self, run: []PathQuery, remaining: *usize, depth: usize) Error!void {
+        fn resolveEntry(self: *Self, queries: []PathQuery, run: []u16, remaining: *usize, depth: usize) Error!void {
             const value = try self.read();
             // An object key without a value.
             if (value == .containerEnd) return error.UnexpectedContainerEnd;
             var leaves: usize = 0;
-            while (leaves < run.len) : (leaves += 1) {
-                const seg = path.currentSegment(&run[leaves]) orelse break;
-                if (seg.rest.len != 0) break;
-            }
-            for (run[0..leaves]) |*q| resolveQuery(q, value, remaining);
+            while (leaves < run.len and queries[run[leaves]].segment.rest.len == 0) leaves += 1;
+            for (run[0..leaves]) |i| resolveQuery(&queries[i], value, remaining);
             if (remaining.* == 0) return;
 
             const children = run[leaves..];
@@ -700,9 +705,20 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 if (value == .object or value == .array) try self.skipRestOfContainer();
                 return;
             }
-            path.descend(children);
-            try self.resolveIn(value, children, remaining, depth + 1);
-            path.ascend(children, depth);
+            for (children) |i| {
+                const q = &queries[i];
+                q.segment = path.parseSegment(q.segment.rest) orelse unreachable; // validated
+            }
+            try self.resolveIn(value, queries, children, remaining, depth + 1);
+            // This level's binary search still compares these queries' segments at `depth`.
+            for (children) |i| segmentAtDepth(&queries[i], depth);
+        }
+
+        /// Sets the query's current segment to the one at `depth` in its path.
+        fn segmentAtDepth(query: *PathQuery, depth: usize) void {
+            var seg = path.parseSegment(query.path) orelse unreachable; // validated
+            for (0..depth) |_| seg = path.parseSegment(seg.rest) orelse unreachable;
+            query.segment = seg;
         }
 
         /// Skips the remaining entries of the container the reader is in, and its end.
