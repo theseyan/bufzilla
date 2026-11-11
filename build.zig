@@ -116,6 +116,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(benchmark);
 
     const run_benchmark = b.addRunArtifact(benchmark);
+    run_benchmark.addPassthruArgs();
     b.step("bench", "Run benchmarks").dependOn(&run_benchmark.step);
 
     // Large buffer benchmark
@@ -134,6 +135,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(large_buffer_bench);
 
     const run_large_bench = b.addRunArtifact(large_buffer_bench);
+    run_large_bench.addPassthruArgs();
     b.step("bench-large", "Run large buffer benchmarks").dependOn(&run_large_bench.step);
 }
 

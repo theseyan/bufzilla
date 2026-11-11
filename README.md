@@ -372,66 +372,60 @@ A failed write leaves the writer unchanged, and a failed read leaves the reader 
 
 ## Benchmarks
 
-Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=fast`.
+There are three benchmark programs. Each accepts `--csv` (for charts), `--quick` and `--filter=<text>`:
+
+```bash
+zig build bench -Doptimize=fast        # bufzilla operations: scalars to structs, paths, updates
+zig build bench-large -Doptimize=fast  # path lookups and updates in a 4 MiB document
+
+cd bench/compare && zig build run -Doptimize=fast   # bufzilla vs other Zig serialization libraries
+```
+
+They time each operation in calibrated batches and report the median of 15 samples, with the spread (interquartile range) to show how stable a result is. Setup, such as building inputs and encoding data to decode, happens outside the timed region.
+
+The comparison ([`bench/compare`](bench/compare)) encodes the same datasets (a record, 1000 records, a 768-float vector) with bufzilla, [zbor](https://github.com/r4gus/zbor) (CBOR), [zig-msgpack](https://github.com/zigcc/zig-msgpack) (MessagePack), [zig-protobuf](https://github.com/Arwalk/zig-protobuf) (Protobuf) and `std.json`. It measures encoded size, encoding, decoding every value, and reading a single field. Before timing, each library's decode must reproduce a checksum of the whole dataset, so every library does the same, complete work. It is a separate package, so bufzilla does not depend on these libraries.
 
 **bufzilla is competitive in performance with similar self-describing binary formats, and in most cases, much faster.**
 ![Benchmark Comparison](misc/bench.png)
 *Avg. throughput (ops/sec): [bufzilla](https://github.com/theseyan/bufzilla) vs [zbor](https://github.com/r4gus/zbor) vs [zig-msgpack](https://github.com/zigcc/zig-msgpack)*
 
-Results on x86_64 Linux, Ryzen 7 9700X CPU:
-```
-Basic Types:
---------------------------------------------------------------------------------
-                              Null Write |  1000000 iterations |        0 ns/op |        0 ops/sec
-                               Null Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                              Bool Write |  1000000 iterations |        0 ns/op |        0 ops/sec
-                               Bool Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                         Small Int Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                          Small Int Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                         Large Int Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                          Large Int Read |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                             Float Write |  1000000 iterations |        2 ns/op | 500000000 ops/sec
-                              Float Read |  1000000 iterations |        1 ns/op | 1000000000 ops/sec
+Comparison results on an Apple M4 (macOS, `-Doptimize=fast`, Zig 0.17.1). Times are medians of 15 samples; in parentheses, the time relative to bufzilla.
 
-Strings:
---------------------------------------------------------------------------------
-            Short String Write (5 bytes) |   500000 iterations |        4 ns/op | 250000000 ops/sec
-             Short String Read (5 bytes) |   500000 iterations |        2 ns/op | 500000000 ops/sec
-        Medium String Write (~300 bytes) |   100000 iterations |        4 ns/op | 250000000 ops/sec
-         Medium String Read (~300 bytes) |   100000 iterations |        2 ns/op | 500000000 ops/sec
+**One record** (strings, integers, a float, a nested object and arrays)
 
-Binary Data:
---------------------------------------------------------------------------------
-           Small Binary Write (32 bytes) |   500000 iterations |        6 ns/op | 166666666 ops/sec
-            Small Binary Read (32 bytes) |   500000 iterations |        2 ns/op | 500000000 ops/sec
-                Large Binary Write (1KB) |   100000 iterations |        9 ns/op | 111111111 ops/sec
-                 Large Binary Read (1KB) |   100000 iterations |        2 ns/op | 500000000 ops/sec
+| Library | Format | Size | Encode | Decode (all values) | Read `address.city` |
+|---|---|---:|---:|---:|---:|
+| bufzilla | bufzilla | 215 B | 72 ns | 134 ns | 75 ns |
+| zbor | CBOR | 206 B | 161 ns (2.2x) | 516 ns (3.9x) | 241 ns (3.2x) |
+| zig-msgpack | MessagePack | 200 B | 138 ns (1.9x) | 471 ns (3.5x) | 446 ns (6.0x) |
+| zig-protobuf | Protobuf | 127 B | 78 ns (1.1x) | 149 ns (1.1x) | 108 ns (1.4x) |
+| std.json | JSON | 265 B | 315 ns (4.4x) | 660 ns (4.9x) | 622 ns (8.3x) |
+| simdjzon¹ | JSON | 265 B | - | 331 ns (2.5x) | 258 ns (3.4x) |
 
-Arrays:
---------------------------------------------------------------------------------
-         Small Array Write (10 elements) |   100000 iterations |       25 ns/op | 40000000 ops/sec
-          Small Array Read (10 elements) |   100000 iterations |       27 ns/op | 37037037 ops/sec
-       Medium Array Write (100 elements) |    50000 iterations |      260 ns/op |  3846153 ops/sec
-        Medium Array Read (100 elements) |    50000 iterations |      243 ns/op |  4115226 ops/sec
+**1000 records**
 
-Objects (Maps):
---------------------------------------------------------------------------------
-         Small Object Write (10 entries) |   100000 iterations |      143 ns/op |  6993006 ops/sec
-          Small Object Read (10 entries) |   100000 iterations |      116 ns/op |  8620689 ops/sec
-        Medium Object Write (50 entries) |    50000 iterations |      712 ns/op |  1404494 ops/sec
-         Medium Object Read (50 entries) |    50000 iterations |      629 ns/op |  1589825 ops/sec
+| Library | Format | Size | Encode | Decode (all values) | Read `[500].username` |
+|---|---|---:|---:|---:|---:|
+| bufzilla | bufzilla | 211,304 B | 81.7 µs | 170.6 µs | 37.1 µs |
+| zbor | CBOR | 203,331 B | 182.9 µs (2.2x) | 652.9 µs (3.8x) | 165.6 µs (4.5x) |
+| zig-msgpack | MessagePack | 202,284 B | 170.3 µs (2.1x) | 485.3 µs (2.8x) | 425.6 µs (11.5x) |
+| zig-protobuf | Protobuf | 126,556 B | 97.3 µs (1.2x) | 168.3 µs (1.0x) | 5.5 µs (0.15x) |
+| std.json | JSON | 266,738 B | 339.0 µs (4.1x) | 678.5 µs (4.0x) | 672.8 µs (18.2x) |
+| simdjzon¹ | JSON | 266,738 B | - | 331.2 µs (1.9x) | 230.8 µs (6.2x) |
 
-Complex Structures:
---------------------------------------------------------------------------------
-                  Nested Structure Write |    50000 iterations |       36 ns/op | 27777777 ops/sec
-                   Nested Structure Read |    50000 iterations |       71 ns/op | 14084507 ops/sec
-                       Mixed Types Write |    50000 iterations |       31 ns/op | 32258064 ops/sec
-                        Mixed Types Read |    50000 iterations |       57 ns/op | 17543859 ops/sec
+**A 768-float vector embedding**
 
-Struct Serialization:
---------------------------------------------------------------------------------
-                     Simple Struct Write |   100000 iterations |       29 ns/op | 34482758 ops/sec
-                      Simple Struct Read |   100000 iterations |       46 ns/op | 21739130 ops/sec
-                    Complex Struct Write |    50000 iterations |      136 ns/op |  7352941 ops/sec
-                     Complex Struct Read |    50000 iterations |      272 ns/op |  3676470 ops/sec
-```
+| Library | Format | Size | Encode | Decode (all values) | Read `values[700]` |
+|---|---|---:|---:|---:|---:|
+| bufzilla | bufzilla | 3,120 B | 73 ns | 402 ns | 27 ns |
+| zbor | CBOR | 3,885 B | 1.65 µs (23x) | 13.30 µs (33x) | 10.61 µs (396x) |
+| zig-msgpack | MessagePack | 3,884 B | 2.89 µs (40x) | 6.62 µs (16x) | 5.33 µs (199x) |
+| zig-protobuf | Protobuf | 3,101 B | 2.16 µs (30x) | 2.99 µs (7.4x) | 2.35 µs (88x) |
+| std.json | JSON | 15,220 B | 17.27 µs (238x) | 26.15 µs (65x) | 25.67 µs (959x) |
+| simdjzon¹ | JSON | 15,220 B | - | 20.68 µs (51x) | 19.30 µs (721x) |
+
+Notes:
+- Decoding reads every value. bufzilla reads them in place, without copying; the others build structs or a tree of values (in an arena). bufzilla, zbor and zig-protobuf read a single field lazily; the others decode the whole document first.
+- Protobuf is schema-based: field names are not in the encoding, so it is the smallest. It also prefixes each nested message with its length, so reading record 500 skips the records before it without reading them; bufzilla, like the other self-describing formats, has to walk them.
+- bufzilla stores the vector as a typed array: encoding it is one copy, and reading any element takes constant time. The others encode and decode each float separately.
+- ¹ simdjzon only parses; its input is `std.json`'s output. It is not part of `bench/compare`: its build script does not support Zig 0.17.1, and it needed two fixes, for integer literals in float fields and for empty arrays. These numbers come from a local build with those fixes.

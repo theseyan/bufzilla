@@ -1,0 +1,26 @@
+.{
+    .name = .bufzilla_compare,
+    .version = "0.0.0",
+    .fingerprint = 0x50604c9d4623c30b,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .bufzilla = .{ .path = "../.." },
+        .zbor = .{
+            .url = "git+https://github.com/r4gus/zbor#347e236876acca92c6ccaafdc87cb772c059b93a",
+            .hash = "zbor-0.23.1-kr-CoL5pBABjWr4a34vmuD66VnkVWMdqSZU3fAp4TH9-",
+        },
+        .msgpack = .{
+            .url = "git+https://github.com/zigcc/zig-msgpack#5884caaa3fcbcd315dbe88c3033e1fc60142071a",
+            .hash = "zig_msgpack-0.0.19-evvueNR-BQBqKazGShn1eDXelQwAQz60su5SfPNB9lQk",
+        },
+        .protobuf = .{
+            .url = "git+https://github.com/Arwalk/zig-protobuf#38ec95e38e136bfc93685b6549018285f5e722b2",
+            .hash = "protobuf-7.0.0-0e82aujcOwCmSdUIDrerIiWx8LAAxIYj20-i3tRkjOPz",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

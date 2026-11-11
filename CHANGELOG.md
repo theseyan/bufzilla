@@ -47,6 +47,10 @@ Measured with A/B benchmarks against the previous code, Apple Silicon, ReleaseFa
 - `Writer.applyUpdates` sorts up to 16 updates with insertion sort instead of block sort, avoiding a 24 KB stack buffer: about 2x faster for a few updates in ReleaseSafe and Debug builds, where that buffer was filled on every call; unchanged in ReleaseFast.
 - Optimize reader hot paths: fast path for single-byte reads and single-query `Reader.readPaths`, and `Reader.readPath` no longer runs a separate path validation pass.
 
+### Benchmarks
+- Rewrote the benchmark suite: each operation is timed in calibrated batches and reported as the median of 15 samples with its spread, and setup is no longer timed (the object benchmarks used to format keys inside the timed loop). The benchmark programs accept `--csv`, `--quick` and `--filter=<text>`.
+- Added `bench/compare`, comparing bufzilla with zbor, zig-msgpack, zig-protobuf and `std.json` on the same datasets. Checksums verify that every library decodes the complete data.
+
 ### Build
 - `-Dno-llvm` is ignored on aarch64 targets, where Zig's self-hosted backend is not ready yet; LLVM is always used there.
 
