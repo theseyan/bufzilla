@@ -395,37 +395,38 @@ Comparison results on an Apple M4 (macOS, `-Doptimize=fast`, Zig 0.17.1). Times 
 
 | Library | Format | Size | Encode | Decode (all values) | Read `address.city` |
 |---|---|---:|---:|---:|---:|
-| bufzilla | bufzilla | 215 B | 72 ns | 134 ns | 75 ns |
-| zbor | CBOR | 206 B | 161 ns (2.2x) | 516 ns (3.9x) | 241 ns (3.2x) |
-| zig-msgpack | MessagePack | 200 B | 138 ns (1.9x) | 471 ns (3.5x) | 446 ns (6.0x) |
-| zig-protobuf | Protobuf | 127 B | 78 ns (1.1x) | 149 ns (1.1x) | 108 ns (1.4x) |
-| std.json | JSON | 265 B | 315 ns (4.4x) | 660 ns (4.9x) | 622 ns (8.3x) |
-| simdjzon¹ | JSON | 265 B | - | 331 ns (2.5x) | 258 ns (3.4x) |
+| bufzilla | bufzilla | 208 B | 65 ns | 119 ns | 49 ns |
+| zbor | CBOR | 206 B | 157 ns (2.4x) | 497 ns (4.2x) | 233 ns (4.7x) |
+| zig-msgpack | MessagePack | 200 B | 140 ns (2.1x) | 478 ns (4.0x) | 450 ns (9.2x) |
+| zig-protobuf | Protobuf | 127 B | 79 ns (1.2x) | 150 ns (1.3x) | 107 ns (2.2x) |
+| std.json | JSON | 265 B | 297 ns (4.6x) | 716 ns (6.0x) | 704 ns (14x) |
+| simdjzon¹ | JSON | 265 B | - | 325 ns (2.7x) | 266 ns (5.4x) |
 
 **1000 records**
 
 | Library | Format | Size | Encode | Decode (all values) | Read `[500].username` |
 |---|---|---:|---:|---:|---:|
-| bufzilla | bufzilla | 211,304 B | 81.7 µs | 170.6 µs | 37.1 µs |
-| zbor | CBOR | 203,331 B | 182.9 µs (2.2x) | 652.9 µs (3.8x) | 165.6 µs (4.5x) |
-| zig-msgpack | MessagePack | 202,284 B | 170.3 µs (2.1x) | 485.3 µs (2.8x) | 425.6 µs (11.5x) |
-| zig-protobuf | Protobuf | 126,556 B | 97.3 µs (1.2x) | 168.3 µs (1.0x) | 5.5 µs (0.15x) |
-| std.json | JSON | 266,738 B | 339.0 µs (4.1x) | 678.5 µs (4.0x) | 672.8 µs (18.2x) |
-| simdjzon¹ | JSON | 266,738 B | - | 331.2 µs (1.9x) | 230.8 µs (6.2x) |
+| bufzilla | bufzilla | 204,407 B | 61.6 µs | 163.7 µs | 31.9 µs |
+| zbor | CBOR | 203,331 B | 183.9 µs (3.0x) | 626.9 µs (3.8x) | 149.7 µs (4.7x) |
+| zig-msgpack | MessagePack | 202,284 B | 172.7 µs (2.8x) | 492.0 µs (3.0x) | 431.3 µs (13.5x) |
+| zig-protobuf | Protobuf | 126,556 B | 100.0 µs (1.6x) | 166.9 µs (1.0x) | 5.5 µs (0.17x) |
+| std.json | JSON | 266,738 B | 324.0 µs (5.3x) | 675.5 µs (4.1x) | 665.9 µs (21x) |
+| simdjzon¹ | JSON | 266,738 B | - | 313.7 µs (1.9x) | 222.3 µs (7.0x) |
 
 **A 768-float vector embedding**
 
 | Library | Format | Size | Encode | Decode (all values) | Read `values[700]` |
 |---|---|---:|---:|---:|---:|
-| bufzilla | bufzilla | 3,120 B | 73 ns | 402 ns | 27 ns |
-| zbor | CBOR | 3,885 B | 1.65 µs (23x) | 13.30 µs (33x) | 10.61 µs (396x) |
-| zig-msgpack | MessagePack | 3,884 B | 2.89 µs (40x) | 6.62 µs (16x) | 5.33 µs (199x) |
-| zig-protobuf | Protobuf | 3,101 B | 2.16 µs (30x) | 2.99 µs (7.4x) | 2.35 µs (88x) |
-| std.json | JSON | 15,220 B | 17.27 µs (238x) | 26.15 µs (65x) | 25.67 µs (959x) |
-| simdjzon¹ | JSON | 15,220 B | - | 20.68 µs (51x) | 19.30 µs (721x) |
+| bufzilla | bufzilla | 3,118 B | 69 ns | 377 ns | 24 ns |
+| zbor | CBOR | 3,885 B | 1.61 µs (23x) | 13.27 µs (35x) | 10.42 µs (442x) |
+| zig-msgpack | MessagePack | 3,884 B | 2.91 µs (42x) | 6.57 µs (17x) | 5.30 µs (225x) |
+| zig-protobuf | Protobuf | 3,101 B | 2.16 µs (31x) | 2.90 µs (7.7x) | 2.41 µs (102x) |
+| std.json | JSON | 15,220 B | 16.65 µs (241x) | 26.10 µs (69x) | 26.23 µs (1113x) |
+| simdjzon¹ | JSON | 15,220 B | - | 20.87 µs (55x) | 19.41 µs (824x) |
 
 Notes:
 - Decoding reads every value. bufzilla reads them in place, without copying; the others build structs or a tree of values (in an arena). bufzilla, zbor and zig-protobuf read a single field lazily; the others decode the whole document first.
+- Integers from -32 to 63 and byte strings up to 31 bytes long fit in a single header byte (MessagePack: -32 to 127 and 31 bytes; CBOR: -24 to 23 and 23 bytes). bufzilla is still slightly larger than both, by at most 1% on the 1000 records and 4% on the single record. Each container ends with an end marker instead of starting with a count, which lets a container be written incrementally without knowing its length in advance; and MessagePack also fits integers up to 127 in one byte.
 - Protobuf is schema-based: field names are not in the encoding, so it is the smallest. It also prefixes each nested message with its length, so reading record 500 skips the records before it without reading them; bufzilla, like the other self-describing formats, has to walk them.
 - bufzilla stores the vector as a typed array: encoding it is one copy, and reading any element takes constant time. The others encode and decode each float separately.
 - ¹ simdjzon only parses; its input is `std.json`'s output. It is not part of `bench/compare`: its build script does not support Zig 0.17.1, and it needed two fixes, for integer literals in float fields and for empty arrays. These numbers come from a local build with those fixes.

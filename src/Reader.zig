@@ -2,6 +2,7 @@
 const std = @import("std");
 const common = @import("common.zig");
 const path = @import("path.zig");
+const tb = common.tag_bytes;
 
 /// A Key-value pair inside an Object.
 pub const KeyValuePair = struct {
@@ -22,11 +23,6 @@ pub const ReadLimits = struct {
 
     /// Maximum object key-value pair count. Set to null for unlimited. Requires max_depth to be set.
     max_object_size: ?usize = null,
-};
-
-const PeekResult = struct {
-    tag: std.meta.Tag(common.Value),
-    data: u3,
 };
 
 /// A single path query for readPaths.
@@ -108,18 +104,42 @@ pub fn Reader(comptime limits: ReadLimits) type {
         pub fn read(self: *Self) !common.Value {
             const tag_byte = try self.readBytes(u8);
 
-            // Decode the tag
-            const decoded_tag = common.decodeTag(tag_byte);
-            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded_tag.tag) orelse return error.InvalidEnumTag;
-
-            switch (val_type) {
-                .containerEnd => {
-                    if (self.depth == 0) return error.UnexpectedContainerEnd;
-                    self.depth -= 1;
-                    return .{ .containerEnd = self.depth };
+            // Every byte is its own (inline) case, so this compiles to one 256-entry jump table, as cheap
+            // as dispatching on a 5-bit field; ranges would compile to a chain of comparisons.
+            switch (tag_byte) {
+                inline tb.small_uint.first...tb.small_uint.last => return .{ .u64 = tag_byte - tb.small_uint.first },
+                inline tb.small_int_negative.first...tb.small_int_positive.last => return .{ .i64 = @as(i64, tag_byte) - common.small_int_zero },
+                inline tb.small_bytes.first...tb.small_bytes.last => {
+                    const len: usize = tag_byte - tb.small_bytes.first;
+                    if (limits.max_bytes_length) |max| {
+                        if (len > max) return error.BytesTooLong;
+                    }
+                    return .{ .bytes = try self.takeBytes(len) };
                 },
-                .object, .array => {
-                    // Check depth limit
+                inline tb.varint_unsigned.first...tb.varint_unsigned.last => |b| return .{ .u64 = try self.readVarInt(@truncate(b)) },
+                inline tb.varint_positive.first...tb.varint_positive.last => |b| {
+                    const magnitude = try self.readVarInt(@truncate(b));
+                    if (magnitude > @as(u64, @intCast(std.math.maxInt(i64)))) return error.InvalidSignedMagnitude;
+                    return .{ .i64 = @intCast(magnitude) };
+                },
+                inline tb.varint_negative.first...tb.varint_negative.last => |b| {
+                    const magnitude = try self.readVarInt(@truncate(b));
+                    if (magnitude == 0) return error.InvalidSignedMagnitude;
+                    if (magnitude == (@as(u64, 1) << 63)) return .{ .i64 = std.math.minInt(i64) };
+                    if (magnitude > @as(u64, @intCast(std.math.maxInt(i64)))) return error.InvalidSignedMagnitude;
+                    return .{ .i64 = -@as(i64, @intCast(magnitude)) };
+                },
+                inline tb.varint_bytes.first...tb.varint_bytes.last => |b| {
+                    const len = try self.readBytesLength(.varIntBytes, @truncate(b));
+                    return .{ .bytes = try self.takeBytes(len) };
+                },
+                inline tb.typed_array.first...tb.typed_array.last => |b| {
+                    const hdr = try self.readTypedArrayHeader(@truncate(b));
+                    const start = self.pos;
+                    self.pos += hdr.payload_len;
+                    return .{ .typedArray = .{ .elem = hdr.elem, .count = hdr.count, .bytes = self.bytes[start..][0..hdr.payload_len] } };
+                },
+                tb.object, tb.array => {
                     if (limits.max_depth) |max| {
                         if (self.depth >= max) return error.MaxDepthExceeded;
                     }
@@ -128,135 +148,50 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     if (needs_counters) {
                         self.iteration_counts[self.depth - 1] = 0;
                     }
-                    return if (val_type == .object) .{ .object = self.depth } else .{ .array = self.depth };
+                    return if (tag_byte == tb.object) .{ .object = self.depth } else .{ .array = self.depth };
                 },
-                .smallIntPositive => {
-                    return .{ .i64 = @as(i64, decoded_tag.data) };
+                tb.container_end => {
+                    if (self.depth == 0) return error.UnexpectedContainerEnd;
+                    self.depth -= 1;
+                    return .{ .containerEnd = self.depth };
                 },
-                .smallIntNegative => {
-                    if (decoded_tag.data == 0) return error.InvalidSignedMagnitude;
-                    return .{ .i64 = -@as(i64, decoded_tag.data) };
+                tb.bytes => {
+                    const len = try self.readBytesLength(.bytes, 0);
+                    return .{ .bytes = try self.takeBytes(len) };
                 },
-                .smallUint => {
-                    return .{ .u64 = @as(u64, decoded_tag.data) };
-                },
-                .varIntUnsigned => {
-                    const size: usize = @as(usize, decoded_tag.data) + 1;
-                    if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const intBytes = self.bytes[self.pos..(self.pos + size)];
-                    self.pos += size;
-
-                    return .{ .u64 = common.decodeVarInt(intBytes) };
-                },
-                .varIntSignedPositive => {
-                    const size: usize = @as(usize, decoded_tag.data) + 1;
-                    if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const intBytes = self.bytes[self.pos..(self.pos + size)];
-                    self.pos += size;
-                    const magnitude = common.decodeVarInt(intBytes);
-                    if (magnitude > @as(u64, @intCast(std.math.maxInt(i64)))) return error.InvalidSignedMagnitude;
-                    return .{ .i64 = @intCast(magnitude) };
-                },
-                .varIntSignedNegative => {
-                    const size: usize = @as(usize, decoded_tag.data) + 1;
-                    if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const intBytes = self.bytes[self.pos..(self.pos + size)];
-                    self.pos += size;
-                    const magnitude = common.decodeVarInt(intBytes);
-                    if (magnitude == 0) return error.InvalidSignedMagnitude;
-                    if (magnitude == (@as(u64, 1) << 63)) return .{ .i64 = std.math.minInt(i64) };
-                    if (magnitude > @as(u64, @intCast(std.math.maxInt(i64)))) return error.InvalidSignedMagnitude;
-                    return .{ .i64 = -@as(i64, @intCast(magnitude)) };
-                },
-                .f64 => {
-                    const f = try self.readBytes(f64);
-                    return .{ .f64 = f };
-                },
-                .f32 => {
-                    const f = try self.readBytes(f32);
-                    return .{ .f32 = f };
-                },
-                .f16 => {
-                    const bits = try self.readBytes(u16);
-                    return .{ .f16 = @bitCast(bits) };
-                },
-                .i64 => {
-                    const i = try self.readBytes(i64);
-                    return .{ .i64 = i };
-                },
-                .i32 => {
-                    const i = try self.readBytes(i32);
-                    return .{ .i32 = i };
-                },
-                .i16 => {
-                    const i = try self.readBytes(i16);
-                    return .{ .i16 = i };
-                },
-                .i8 => {
-                    const i = try self.readBytes(i8);
-                    return .{ .i8 = i };
-                },
-                .u64 => {
-                    const u = try self.readBytes(u64);
-                    return .{ .u64 = u };
-                },
-                .u32 => {
-                    const u = try self.readBytes(u32);
-                    return .{ .u32 = u };
-                },
-                .u16 => {
-                    const u = try self.readBytes(u16);
-                    return .{ .u16 = u };
-                },
-                .u8 => {
-                    const u = try self.readBytes(u8);
-                    return .{ .u8 = u };
-                },
-                .null => {
-                    return .{ .null = undefined };
-                },
-                .bool => {
-                    return .{ .bool = (decoded_tag.data != 0) };
-                },
-                .varIntBytes => {
-                    const len = try self.readBytesLength(.varIntBytes, decoded_tag.data);
-                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const str_ptr = self.pos;
-                    self.pos += len;
-                    return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
-                },
-                .smallBytes => {
-                    const len: usize = decoded_tag.data;
-
-                    if (limits.max_bytes_length) |max| {
-                        if (len > max) return error.BytesTooLong;
-                    }
-
-                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const str_ptr = self.pos;
-                    self.pos += len;
-                    return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
-                },
-                .typedArray => {
-                    const hdr = try self.readTypedArrayHeader(decoded_tag.data);
-                    const start = self.pos;
-                    self.pos += hdr.payload_len;
-                    return .{ .typedArray = .{ .elem = hdr.elem, .count = hdr.count, .bytes = self.bytes[start..][0..hdr.payload_len] } };
-                },
-                .bytes => {
-                    const len = try self.readBytesLength(.bytes, decoded_tag.data);
-                    if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-                    const str_ptr = self.pos;
-                    self.pos += len;
-                    return .{ .bytes = self.bytes[str_ptr..(str_ptr + len)] };
-                },
+                tb.u8 => return .{ .u8 = try self.readBytes(u8) },
+                tb.u16 => return .{ .u16 = try self.readBytes(u16) },
+                tb.u32 => return .{ .u32 = try self.readBytes(u32) },
+                tb.u64 => return .{ .u64 = try self.readBytes(u64) },
+                tb.i8 => return .{ .i8 = try self.readBytes(i8) },
+                tb.i16 => return .{ .i16 = try self.readBytes(i16) },
+                tb.i32 => return .{ .i32 = try self.readBytes(i32) },
+                tb.i64 => return .{ .i64 = try self.readBytes(i64) },
+                tb.f16 => return .{ .f16 = @bitCast(try self.readBytes(u16)) },
+                tb.f32 => return .{ .f32 = try self.readBytes(f32) },
+                tb.f64 => return .{ .f64 = try self.readBytes(f64) },
+                tb.false, tb.true => return .{ .bool = tag_byte == tb.true },
+                tb.null => return .{ .null = {} },
+                else => return error.InvalidEnumTag,
             }
+        }
+
+        /// Takes the next `len` bytes.
+        inline fn takeBytes(self: *Self, len: usize) ![]const u8 {
+            if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
+            const result = self.bytes[self.pos..][0..len];
+            self.pos += len;
+            return result;
+        }
+
+        /// Reads a varint of `size_minus_one + 1` bytes. Varint-sized kinds start at 8-aligned tag bytes,
+        /// so callers pass the low 3 bits of the tag byte.
+        inline fn readVarInt(self: *Self, size_minus_one: u3) !u64 {
+            const size: usize = @as(usize, size_minus_one) + 1;
+            if (size > self.bytes.len - self.pos) return error.UnexpectedEof;
+            const value = common.decodeVarInt(self.bytes[self.pos..][0..size]);
+            self.pos += size;
+            return value;
         }
 
         /// Discards data items until the target depth is reached.
@@ -266,28 +201,21 @@ pub fn Reader(comptime limits: ReadLimits) type {
             }
         }
 
-        /// Peeks at the next tag without advancing position.
-        fn peekTag(self: *Self) !PeekResult {
+        /// The next tag byte, without advancing. A reserved byte is an error here, before callers check
+        /// container size limits.
+        inline fn peekByte(self: *Self) !u8 {
             if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-            const tag_byte = self.bytes[self.pos];
-            const decoded = common.decodeTag(tag_byte);
-            const tag = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse return error.InvalidEnumTag;
-            return .{ .tag = tag, .data = decoded.data };
+            const byte = self.bytes[self.pos];
+            if (tb.isReserved(byte)) return error.InvalidEnumTag;
+            return byte;
         }
 
-        /// Reads the length from a varIntBytes or bytes tag.
-        inline fn readBytesLength(self: *Self, val_type: std.meta.Tag(common.Value), tag_data: u3) !usize {
-            const len_u64 = if (val_type == .varIntBytes) blk: {
-                const size_len: usize = @as(usize, tag_data) + 1;
-                if (size_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-                const len = common.decodeVarInt(self.bytes[self.pos..][0..size_len]);
-                self.pos += size_len;
-                break :blk len;
-            } else blk: { // .bytes
-                if (8 > self.bytes.len - self.pos) return error.UnexpectedEof;
-                const len = std.mem.readInt(u64, self.bytes[self.pos..][0..8], .little);
-                self.pos += 8;
-                break :blk len;
+        /// Reads the length of a varIntBytes or bytes item.
+        inline fn readBytesLength(self: *Self, comptime kind: common.Kind, size_minus_one: u3) !usize {
+            const len_u64 = switch (kind) {
+                .varIntBytes => try self.readVarInt(size_minus_one),
+                .bytes => try self.readBytes(u64),
+                else => comptime unreachable,
             };
 
             if (len_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
@@ -304,16 +232,10 @@ pub fn Reader(comptime limits: ReadLimits) type {
             payload_len: usize,
         };
 
-        inline fn readTypedArrayHeader(self: *Self, tag_data: u3) !TypedArrayHeader {
-            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-            const elem_byte = self.bytes[self.pos];
-            self.pos += 1;
+        inline fn readTypedArrayHeader(self: *Self, size_minus_one: u3) !TypedArrayHeader {
+            const elem_byte = try self.readBytes(u8);
             const elem = std.enums.fromInt(common.TypedArrayElem, elem_byte) orelse return error.InvalidEnumTag;
-
-            const count_len: usize = @as(usize, tag_data) + 1;
-            if (count_len > self.bytes.len - self.pos) return error.UnexpectedEof;
-            const count_u64 = common.decodeVarInt(self.bytes[self.pos..][0..count_len]);
-            self.pos += count_len;
+            const count_u64 = try self.readVarInt(size_minus_one);
 
             if (count_u64 > std.math.maxInt(usize)) return error.BytesTooLong;
             const count: usize = @intCast(count_u64);
@@ -327,125 +249,90 @@ pub fn Reader(comptime limits: ReadLimits) type {
             return .{ .elem = elem, .count = count, .payload_len = payload_len };
         }
 
-        const SkipEvent = enum { done, enter_container, exit_container };
-
         inline fn skipBytes(self: *Self, len: usize) !void {
             if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
             self.pos += len;
         }
 
-        inline fn skipOneValue(self: *Self, decoded: common.Tag, typ: std.meta.Tag(common.Value)) !SkipEvent {
-            switch (typ) {
-                // Fixed size types
-                .f64, .i64, .u64 => try self.skipBytes(8),
-                .f32, .i32, .u32 => try self.skipBytes(4),
-                .f16 => try self.skipBytes(2),
-                .i16, .u16 => try self.skipBytes(2),
-                .i8, .u8 => try self.skipBytes(1),
-                .null, .bool => {},
-                .smallIntPositive, .smallIntNegative, .smallUint => {},
-
-                // Variable length integers
-                .varIntUnsigned, .varIntSignedPositive, .varIntSignedNegative => {
-                    const size: usize = @as(usize, decoded.data) + 1;
-                    try self.skipBytes(size);
-                },
-
-                // Byte arrays
-                .smallBytes => {
-                    const len: usize = decoded.data;
+        /// Skips the item that `tag_byte` (already consumed) starts. Callers handle container tags
+        /// first, and pass the byte as a comptime value from an `inline else`, so that every byte is a
+        /// case of the caller's single jump table.
+        inline fn skipScalar(self: *Self, comptime tag_byte: u8) !void {
+            switch (tag_byte) {
+                tb.small_uint.first...tb.small_uint.last,
+                tb.small_int_negative.first...tb.small_int_positive.last,
+                tb.false,
+                tb.true,
+                tb.null,
+                => {},
+                tb.small_bytes.first...tb.small_bytes.last => {
+                    const len: usize = tag_byte - tb.small_bytes.first;
                     if (limits.max_bytes_length) |max| {
                         if (len > max) return error.BytesTooLong;
                     }
                     try self.skipBytes(len);
                 },
-                .typedArray => {
-                    const hdr = try self.readTypedArrayHeader(decoded.data);
+                tb.varint_unsigned.first...tb.varint_negative.last => try self.skipBytes(@as(usize, @as(u3, @truncate(tag_byte))) + 1),
+                tb.varint_bytes.first...tb.varint_bytes.last => try self.skipBytes(try self.readBytesLength(.varIntBytes, @truncate(tag_byte))),
+                tb.typed_array.first...tb.typed_array.last => {
+                    const hdr = try self.readTypedArrayHeader(@truncate(tag_byte));
                     try self.skipBytes(hdr.payload_len);
                 },
-                .varIntBytes, .bytes => {
-                    const len = try self.readBytesLength(typ, decoded.data);
-                    try self.skipBytes(len);
-                },
-
-                .array, .object => return .enter_container,
-                .containerEnd => return .exit_container,
+                tb.bytes => try self.skipBytes(try self.readBytesLength(.bytes, 0)),
+                tb.u8, tb.i8 => try self.skipBytes(1),
+                tb.u16, tb.i16, tb.f16 => try self.skipBytes(2),
+                tb.u32, tb.i32, tb.f32 => try self.skipBytes(4),
+                tb.u64, tb.i64, tb.f64 => try self.skipBytes(8),
+                tb.array, tb.object, tb.container_end => comptime unreachable,
+                else => return error.InvalidEnumTag,
             }
-
-            return .done;
         }
 
         /// Skips a single value without materializing it.
         pub fn skipValue(self: *Self) !void {
-            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
+            @setEvalBranchQuota(4000); // for the `inline else` over every byte value
+            switch (try self.readBytes(u8)) {
+                tb.array, tb.object => {},
+                tb.container_end => return error.UnexpectedContainerEnd,
+                inline else => |tag_byte| return self.skipScalar(tag_byte),
+            }
 
-            const tag_byte = self.bytes[self.pos];
-            self.pos += 1;
-
-            const decoded = common.decodeTag(tag_byte);
-            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse return error.InvalidEnumTag;
-
-            switch (val_type) {
-                .array, .object => {
-                    if (limits.max_depth) |max| {
-                        if (self.depth >= max) return error.MaxDepthExceeded;
-                    }
-
-                    var nest_depth: u32 = 1;
-                    while (nest_depth > 0) {
-                        if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-
-                        const inner_tag = self.bytes[self.pos];
-                        self.pos += 1;
-
-                        const inner_decoded = common.decodeTag(inner_tag);
-                        const inner_type = std.enums.fromInt(std.meta.Tag(common.Value), inner_decoded.tag) orelse return error.InvalidEnumTag;
-
-                        const ev = try skipOneValue(self, inner_decoded, inner_type);
-                        switch (ev) {
-                            .done => {},
-                            .enter_container => {
-                                if (limits.max_depth) |max| {
-                                    if (self.depth + nest_depth >= max) return error.MaxDepthExceeded;
-                                }
-                                nest_depth += 1;
-                            },
-                            .exit_container => nest_depth -= 1,
+            if (limits.max_depth) |max| {
+                if (self.depth >= max) return error.MaxDepthExceeded;
+            }
+            var nest_depth: u32 = 1;
+            while (nest_depth > 0) {
+                switch (try self.readBytes(u8)) {
+                    tb.array, tb.object => {
+                        if (limits.max_depth) |max| {
+                            if (self.depth + nest_depth >= max) return error.MaxDepthExceeded;
                         }
-                    }
-                },
-
-                .containerEnd => return error.UnexpectedContainerEnd,
-                else => _ = try skipOneValue(self, decoded, val_type),
+                        nest_depth += 1;
+                    },
+                    tb.container_end => nest_depth -= 1,
+                    inline else => |tag_byte| try self.skipScalar(tag_byte),
+                }
             }
         }
 
-        /// Reads the bytes content of a varIntBytes or bytes tag and returns a slice.
+        /// Reads a byte string item (smallBytes, varIntBytes or bytes) and returns its contents.
         fn readBytesSlice(self: *Self) ![]const u8 {
-            if (self.pos >= self.bytes.len) return error.UnexpectedEof;
-
-            const tag_byte = self.bytes[self.pos];
-            self.pos += 1;
-
-            const decoded = common.decodeTag(tag_byte);
-            const val_type = std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse return error.InvalidEnumTag;
-
-            if (val_type != .varIntBytes and val_type != .bytes and val_type != .smallBytes) {
-                return error.InvalidEnumTag;
-            }
-
-            const len = if (val_type == .smallBytes) blk: {
-                const l: usize = decoded.data;
+            const tag_byte = try self.readBytes(u8);
+            // Comparisons rather than a jump table: keys are nearly always short strings, so the
+            // first one is predictable.
+            const len: usize = if (tag_byte >= tb.small_bytes.first and tag_byte <= tb.small_bytes.last) blk: {
+                const l: usize = tag_byte - tb.small_bytes.first;
                 if (limits.max_bytes_length) |max| {
                     if (l > max) return error.BytesTooLong;
                 }
                 break :blk l;
-            } else try self.readBytesLength(val_type, decoded.data);
-            if (len > self.bytes.len - self.pos) return error.UnexpectedEof;
-
-            const result = self.bytes[self.pos..][0..len];
-            self.pos += len;
-            return result;
+            } else if (tag_byte >= tb.varint_bytes.first and tag_byte <= tb.varint_bytes.last)
+                try self.readBytesLength(.varIntBytes, @truncate(tag_byte))
+            else if (tag_byte == tb.bytes)
+                try self.readBytesLength(.bytes, 0)
+            else
+                return error.InvalidEnumTag;
+            return self.takeBytes(len);
         }
 
         /// Iterates over the key-value pairs of a given Value Object.
@@ -614,14 +501,14 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 if (remaining.* == 0) return;
                 if (pending == 0) return self.skipRestOfContainer();
 
-                const peek = try self.peekTag();
-                if (peek.tag == .containerEnd) break;
+                const peek = try self.peekByte();
+                if (peek == tb.container_end) break;
                 if (limits.max_object_size) |max| {
                     if (entries >= max) return error.ObjectTooLarge;
                 }
                 entries += 1;
 
-                if (peek.tag != .varIntBytes and peek.tag != .bytes and peek.tag != .smallBytes) {
+                if (!tb.isBytes(peek)) {
                     // Only byte string keys can match: skip the key and its value.
                     try self.skipValue();
                     try self.skipValue();
@@ -668,8 +555,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 if (cursor == order.len) return self.skipRestOfContainer();
                 const target = queries[order[cursor]].segment.index;
 
-                const peek = try self.peekTag();
-                if (peek.tag == .containerEnd) break;
+                if (try self.peekByte() == tb.container_end) break;
                 if (limits.max_array_length) |max| {
                     if (idx >= max) return error.ArrayTooLarge;
                 }
@@ -723,7 +609,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
         /// Skips the remaining entries of the container the reader is in, and its end.
         fn skipRestOfContainer(self: *Self) Error!void {
-            while ((try self.peekTag()).tag != .containerEnd) try self.skipValue();
+            while (try self.peekByte() != tb.container_end) try self.skipValue();
             _ = try self.read();
         }
 
@@ -745,8 +631,8 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             var kv_count: usize = 0;
             while (true) {
-                const peek = try self.peekTag();
-                if (peek.tag == .containerEnd) {
+                const peek = try self.peekByte();
+                if (peek == tb.container_end) {
                     _ = try self.read();
                     return null;
                 }
@@ -755,7 +641,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
                     if (kv_count >= max) return error.ObjectTooLarge;
                 }
 
-                if (peek.tag != .varIntBytes and peek.tag != .bytes and peek.tag != .smallBytes) {
+                if (!tb.isBytes(peek)) {
                     try self.skipValue();
                     try self.skipValue();
                     kv_count += 1;
@@ -782,8 +668,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             var idx: usize = 0;
             while (true) : (idx += 1) {
-                const peek = try self.peekTag();
-                if (peek.tag == .containerEnd) {
+                if (try self.peekByte() == tb.container_end) {
                     _ = try self.read();
                     return null;
                 }

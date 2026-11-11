@@ -30,10 +30,10 @@ pub const Limits = struct {
 
 const ReadError = reader_mod.Error;
 
-fn peekTagType(reader: anytype, buf: []const u8) ReadError!std.meta.Tag(common.Value) {
+fn peekTagType(reader: anytype, buf: []const u8) ReadError!common.Kind {
     if (reader.pos >= buf.len) return ReadError.UnexpectedEof;
-    const decoded = common.decodeTag(buf[reader.pos]);
-    return std.enums.fromInt(std.meta.Tag(common.Value), decoded.tag) orelse ReadError.InvalidEnumTag;
+    const decoded = common.decodeTag(buf[reader.pos]) orelse return ReadError.InvalidEnumTag;
+    return decoded.kind;
 }
 
 // =============================================================================

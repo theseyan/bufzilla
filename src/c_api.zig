@@ -205,7 +205,7 @@ fn parseValue(value: BufzillaValue) Error!common.Value {
         .varIntBytes => .{ .varIntBytes = try constSlice(data.bytes) },
         .smallBytes => blk: {
             const bytes = try constSlice(data.bytes);
-            if (bytes.len > 7) return error.InvalidArgument;
+            if (bytes.len > common.small_bytes_max) return error.InvalidArgument;
             break :blk .{ .smallBytes = bytes };
         },
         .u64 => .{ .u64 = data.u64_value },
@@ -225,9 +225,9 @@ fn parseValue(value: BufzillaValue) Error!common.Value {
             else => return error.InvalidArgument,
         } },
         .null => .{ .null = {} },
-        .smallIntPositive => if (data.small_value <= 7) .{ .smallIntPositive = data.small_value } else error.InvalidArgument,
-        .smallIntNegative => if (data.small_value >= 1 and data.small_value <= 7) .{ .smallIntNegative = data.small_value } else error.InvalidArgument,
-        .smallUint => if (data.small_value <= 7) .{ .smallUint = data.small_value } else error.InvalidArgument,
+        .smallIntPositive => if (data.small_value <= common.small_int_max) .{ .smallIntPositive = data.small_value } else error.InvalidArgument,
+        .smallIntNegative => if (data.small_value >= 1 and data.small_value <= -common.small_int_min) .{ .smallIntNegative = data.small_value } else error.InvalidArgument,
+        .smallUint => if (data.small_value <= common.small_uint_max) .{ .smallUint = data.small_value } else error.InvalidArgument,
         .varIntSignedPositive => if (data.i64_value >= 0) .{ .varIntSignedPositive = data.i64_value } else error.InvalidArgument,
         .varIntSignedNegative => if (data.i64_value < 0) .{ .varIntSignedNegative = data.i64_value } else error.InvalidArgument,
         .varIntUnsigned => .{ .varIntUnsigned = data.u64_value },

@@ -115,7 +115,7 @@ typedef int bufzilla_value_tag;
 enum {
     BUFZILLA_VALUE_BYTES = 0,                   /* data.bytes, 8-byte length */
     BUFZILLA_VALUE_VAR_INT_BYTES = 1,           /* data.bytes, varint length */
-    BUFZILLA_VALUE_SMALL_BYTES = 2,             /* data.bytes, at most 7 bytes */
+    BUFZILLA_VALUE_SMALL_BYTES = 2,             /* data.bytes, at most 31 bytes */
     BUFZILLA_VALUE_U64 = 3,                     /* data.u64_value */
     BUFZILLA_VALUE_U32 = 4,                     /* data.u32_value */
     BUFZILLA_VALUE_U16 = 5,                     /* data.u16_value */
@@ -129,9 +129,9 @@ enum {
     BUFZILLA_VALUE_F16 = 13,                    /* data.f16_bits, IEEE 754 binary16 */
     BUFZILLA_VALUE_BOOL = 14,                   /* data.bool_value, 0 or 1 */
     BUFZILLA_VALUE_NULL = 15,
-    BUFZILLA_VALUE_SMALL_INT_POSITIVE = 16,     /* data.small_value, 0..7 */
-    BUFZILLA_VALUE_SMALL_INT_NEGATIVE = 17,     /* data.small_value, magnitude 1..7 */
-    BUFZILLA_VALUE_SMALL_UINT = 18,             /* data.small_value, 0..7 */
+    BUFZILLA_VALUE_SMALL_INT_POSITIVE = 16,     /* data.small_value, 0..63 */
+    BUFZILLA_VALUE_SMALL_INT_NEGATIVE = 17,     /* data.small_value, magnitude 1..32 */
+    BUFZILLA_VALUE_SMALL_UINT = 18,             /* data.small_value, 0..63 */
     BUFZILLA_VALUE_VAR_INT_SIGNED_POSITIVE = 19, /* data.i64_value, >= 0 */
     BUFZILLA_VALUE_VAR_INT_SIGNED_NEGATIVE = 20, /* data.i64_value, < 0 */
     BUFZILLA_VALUE_VAR_INT_UNSIGNED = 21,       /* data.u64_value */

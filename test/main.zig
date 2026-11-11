@@ -143,69 +143,207 @@ test "writer/fixed: simple values" {
     try std.testing.expect((try reader.read()) == .null);
 }
 
-test "writer/fixed: small tags are used" {
-    // smallIntPositive
+fn expectEncoding(value: anytype, kind: Common.Kind, data: u8, len: usize) !void {
+    var buffer: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.writeAny(value);
+    const written = fixed.buffered();
+    try std.testing.expectEqual(len, written.len);
+    const decoded = Common.decodeTag(written[0]).?;
+    try std.testing.expectEqual(kind, decoded.kind);
+    try std.testing.expectEqual(data, decoded.data);
+}
+
+test "writer/fixed: small tags are used up to their limits" {
+    try expectEncoding(@as(u64, 0), .smallUint, 0, 1);
+    try expectEncoding(@as(u64, 63), .smallUint, 63, 1);
+    try expectEncoding(@as(u64, 64), .varIntUnsigned, 0, 2);
+    try expectEncoding(@as(u8, 63), .smallUint, 63, 1);
+
+    try expectEncoding(@as(i64, 0), .smallIntPositive, 0, 1);
+    try expectEncoding(@as(i64, 63), .smallIntPositive, 63, 1);
+    try expectEncoding(@as(i64, 64), .varIntSignedPositive, 0, 2);
+    try expectEncoding(@as(i64, -1), .smallIntNegative, 1, 1);
+    try expectEncoding(@as(i64, -32), .smallIntNegative, 32, 1);
+    try expectEncoding(@as(i64, -33), .varIntSignedNegative, 0, 2);
+    try expectEncoding(@as(i8, -32), .smallIntNegative, 32, 1);
+
+    try expectEncoding(@as([]const u8, ""), .smallBytes, 0, 1);
+    const a31: [31]u8 = @splat('a');
+    const a32: [32]u8 = @splat('a');
+    try expectEncoding(@as([]const u8, &a31), .smallBytes, 31, 1 + 31);
+    try expectEncoding(@as([]const u8, &a32), .varIntBytes, 0, 2 + 32);
+    try expectEncoding(&a31, .smallBytes, 31, 1 + 31);
+    try expectEncoding(&a32, .varIntBytes, 0, 2 + 32);
+
+    // Struct keys also use smallBytes up to 31 bytes: [ object ][ key tag ][ key ][ value ][ end ]
     {
-        var buffer: [16]u8 = undefined;
+        const S = struct { a: i64, abcdefghijklmnopqrstuvwxyz01234: i64, abcdefghijklmnopqrstuvwxyz012345: i64 };
+        var buffer: [128]u8 = undefined;
         var fixed = Io.Writer.fixed(&buffer);
         var writer = Writer.init(&fixed);
-
-        try writer.writeAny(@as(i64, 7));
+        try writer.writeAny(S{ .a = 1, .abcdefghijklmnopqrstuvwxyz01234 = 2, .abcdefghijklmnopqrstuvwxyz012345 = 3 });
         const written = fixed.buffered();
-        try std.testing.expectEqual(@as(usize, 1), written.len);
-
-        const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallIntPositive))), decoded.tag);
-        try std.testing.expectEqual(@as(u3, 7), decoded.data);
-    }
-
-    // smallIntNegative
-    {
-        var buffer: [16]u8 = undefined;
-        var fixed = Io.Writer.fixed(&buffer);
-        var writer = Writer.init(&fixed);
-
-        try writer.writeAny(@as(i64, -7));
-        const written = fixed.buffered();
-        try std.testing.expectEqual(@as(usize, 1), written.len);
-
-        const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallIntNegative))), decoded.tag);
-        try std.testing.expectEqual(@as(u3, 7), decoded.data);
-    }
-
-    // smallBytes
-    {
-        var buffer: [32]u8 = undefined;
-        var fixed = Io.Writer.fixed(&buffer);
-        var writer = Writer.init(&fixed);
-
-        try writer.writeAny("1234567"); // len=7
-        const written = fixed.buffered();
-        try std.testing.expectEqual(@as(usize, 1 + 7), written.len);
-
-        const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallBytes))), decoded.tag);
-        try std.testing.expectEqual(@as(u3, 7), decoded.data);
-    }
-
-    // Struct keys also use smallBytes when short
-    {
-        const S = struct { a: i64 };
-        var buffer: [32]u8 = undefined;
-        var fixed = Io.Writer.fixed(&buffer);
-        var writer = Writer.init(&fixed);
-
-        try writer.writeAny(S{ .a = 1 });
-        const written = fixed.buffered();
-        try std.testing.expect(written.len > 0);
-
-        // [ object_tag ][ key_tag ][ 'a' ][ value_tag ][ end_tag ]
-        const key_decoded = Common.decodeTag(written[1]);
-        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallBytes))), key_decoded.tag);
-        try std.testing.expectEqual(@as(u3, 1), key_decoded.data);
+        try std.testing.expectEqual(Common.Tag{ .kind = .smallBytes, .data = 1 }, Common.decodeTag(written[1]).?);
         try std.testing.expectEqual(@as(u8, 'a'), written[2]);
+        try std.testing.expectEqual(Common.Tag{ .kind = .smallBytes, .data = 31 }, Common.decodeTag(written[4]).?);
+        try std.testing.expectEqual(Common.Tag{ .kind = .varIntBytes, .data = 0 }, Common.decodeTag(written[37]).?);
+        try std.testing.expectEqual(@as(u8, 32), written[38]);
+
+        var reader = Reader(.{}).init(written);
+        const obj = try reader.read();
+        var keys: usize = 0;
+        while (try reader.iterateObject(obj)) |kv| : (keys += 1) {
+            try std.testing.expectEqualStrings(std.meta.fieldNames(S)[keys], kv.key.bytes);
+            try std.testing.expectEqual(@as(i64, @intCast(keys + 1)), kv.value.i64);
+        }
+        try std.testing.expectEqual(@as(usize, 3), keys);
     }
+}
+
+test "encoding: wire format is stable" {
+    // Pins the tag byte layout documented on `Common.Tag`, and the exact encoding of an item of every
+    // kind, so that format changes are deliberate.
+    const tb = Common.tag_bytes;
+    const R = Common.ByteRange;
+    try std.testing.expectEqual(R{ .first = 0x00, .last = 0x3F }, tb.small_uint);
+    try std.testing.expectEqual(R{ .first = 0x40, .last = 0x5F }, tb.small_int_negative);
+    try std.testing.expectEqual(R{ .first = 0x60, .last = 0x9F }, tb.small_int_positive);
+    try std.testing.expectEqual(R{ .first = 0xA0, .last = 0xBF }, tb.small_bytes);
+    try std.testing.expectEqual(R{ .first = 0xC0, .last = 0xC7 }, tb.varint_unsigned);
+    try std.testing.expectEqual(R{ .first = 0xC8, .last = 0xCF }, tb.varint_positive);
+    try std.testing.expectEqual(R{ .first = 0xD0, .last = 0xD7 }, tb.varint_negative);
+    try std.testing.expectEqual(R{ .first = 0xD8, .last = 0xDF }, tb.varint_bytes);
+    try std.testing.expectEqual(R{ .first = 0xE0, .last = 0xE7 }, tb.typed_array);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9 },
+        &.{ tb.array, tb.object, tb.container_end, tb.bytes, tb.u8, tb.u16, tb.u32, tb.u64, tb.i8, tb.i16, tb.i32, tb.i64, tb.f16, tb.f32, tb.f64, tb.false, tb.true, tb.null },
+    );
+
+    const x32: [32]u8 = @splat('x');
+    const S = struct {
+        u: u64 = 63,
+        i: i64 = -32,
+        p: i64 = 5,
+        big: u64 = 300,
+        pos: i64 = 300,
+        neg: i64 = -300,
+        s: []const u8 = "hi",
+        l: []const u8 = &x32,
+        f: f32 = 1.5,
+        d: f64 = 1.5,
+        h: f16 = 1.5,
+        b: [2]bool = .{ false, true },
+        n: ?u8 = null,
+    };
+    var buffer: [256]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.writeAny(S{});
+    try writer.writeTypedArray(&[_]u16{ 1, 2 });
+    try writer.write(.{ .u8 = 7 }, .u8);
+    try writer.write(.{ .u16 = 7 }, .u16);
+    try writer.write(.{ .u32 = 7 }, .u32);
+    try writer.write(.{ .u64 = 7 }, .u64);
+    try writer.write(.{ .i8 = -1 }, .i8);
+    try writer.write(.{ .i16 = -1 }, .i16);
+    try writer.write(.{ .i32 = -1 }, .i32);
+    try writer.write(.{ .i64 = -1 }, .i64);
+    try writer.write(.{ .bytes = "x" }, .bytes);
+    const expected = [_]u8{
+        0xE9, // object
+        0xA1, 'u', 0x3F, // "u": 63
+        0xA1, 'i', 0x40, // "i": -32
+        0xA1, 'p', 0x65, // "p": 5
+        0xA3, 'b', 'i', 'g', 0xC1, 0x2C, 0x01, // "big": 300 (2-byte unsigned varint)
+        0xA3, 'p', 'o', 's', 0xC9, 0x2C, 0x01, // "pos": 300 (signed, positive)
+        0xA3, 'n', 'e', 'g', 0xD1, 0x2C, 0x01, // "neg": -300 (signed, negative)
+        0xA1, 's', 0xA2, 'h', 'i', // "s": "hi"
+        0xA1, 'l', 0xD8, 0x20, // "l": 32 bytes, 1-byte length
+    } ++ x32 ++ [_]u8{
+        0xA1, 'f', 0xF5, 0x00, 0x00, 0xC0, 0x3F, // "f": f32 1.5
+        0xA1, 'd', 0xF6, 0, 0, 0, 0, 0, 0, 0xF8, 0x3F, // "d": f64 1.5
+        0xA1, 'h', 0xF4, 0x00, 0x3E, // "h": f16 1.5
+        0xA1, 'b', 0xE8, 0xF7, 0xF8, 0xEA, // "b": [false, true]
+        0xA1, 'n', 0xF9, // "n": null
+        0xEA, // end of object
+        0xE0, @backingInt(Common.TypedArrayElem.u16), 0x02, 0x01, 0x00, 0x02, 0x00, // typed array of 2 u16
+        0xEC, 0x07, // u8
+        0xED, 0x07, 0x00, // u16
+        0xEE, 0x07, 0x00, 0x00, 0x00, // u32
+        0xEF, 0x07, 0, 0, 0, 0, 0, 0, 0, // u64
+        0xF0, 0xFF, // i8 -1
+        0xF1, 0xFF, 0xFF, // i16 -1
+        0xF2, 0xFF, 0xFF, 0xFF, 0xFF, // i32 -1
+        0xF3, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // i64 -1
+        0xEB, 0x01, 0, 0, 0, 0, 0, 0, 0, 'x', // bytes "x" with a u64 length
+    };
+    try std.testing.expectEqualSlices(u8, &expected, fixed.buffered());
+
+    // It decodes to the values written.
+    var reader = Reader(.{}).init(fixed.buffered());
+    const obj = try reader.read();
+    const fields = [_]Value{
+        .{ .u64 = 63 },   .{ .i64 = -32 },    .{ .i64 = 5 },      .{ .u64 = 300 }, .{ .i64 = 300 },
+        .{ .i64 = -300 }, .{ .bytes = "hi" }, .{ .bytes = &x32 }, .{ .f32 = 1.5 }, .{ .f64 = 1.5 },
+        .{ .f16 = 1.5 },
+    };
+    for (fields) |expected_value| try std.testing.expectEqualDeep(expected_value, (try reader.iterateObject(obj)).?.value);
+    const array = (try reader.iterateObject(obj)).?.value;
+    try std.testing.expectEqualDeep(Value{ .bool = false }, (try reader.iterateArray(array)).?);
+    try std.testing.expectEqualDeep(Value{ .bool = true }, (try reader.iterateArray(array)).?);
+    try std.testing.expectEqual(null, try reader.iterateArray(array));
+    try std.testing.expect((try reader.iterateObject(obj)).?.value == .null);
+    try std.testing.expectEqual(null, try reader.iterateObject(obj));
+    const ta = (try reader.read()).typedArray;
+    try std.testing.expectEqual(Common.TypedArrayElem.u16, ta.elem);
+    try std.testing.expectEqual(@as(usize, 2), ta.count);
+    const rest = [_]Value{
+        .{ .u8 = 7 },      .{ .u16 = 7 },  .{ .u32 = 7 },  .{ .u64 = 7 },
+        .{ .i8 = -1 },     .{ .i16 = -1 }, .{ .i32 = -1 }, .{ .i64 = -1 },
+        .{ .bytes = "x" },
+    };
+    for (rest) |expected_value| try std.testing.expectEqualDeep(expected_value, try reader.read());
+    try std.testing.expectEqual(fixed.buffered().len, reader.pos);
+}
+
+test "reader: reserved tag bytes are rejected" {
+    for ([_]u8{ 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF }) |byte| {
+        try std.testing.expectEqual(@as(?Common.Tag, null), Common.decodeTag(byte));
+        const buf = [_]u8{ byte, 0, 0, 0, 0, 0, 0, 0, 0 };
+        var reader = Reader(.{}).init(&buf);
+        try std.testing.expectError(error.InvalidEnumTag, reader.read());
+        var top_skip_reader = Reader(.{}).init(&buf);
+        try std.testing.expectError(error.InvalidEnumTag, top_skip_reader.skipValue());
+        // Inside a container, while skipping and while looking up a path.
+        const nested = [_]u8{ 0xE9, 0xA1, 'a', byte, 0xEA };
+        var skip_reader = Reader(.{}).init(&nested);
+        try std.testing.expectError(error.InvalidEnumTag, skip_reader.skipValue());
+        var path_reader = Reader(.{}).init(&nested);
+        try std.testing.expectError(error.InvalidEnumTag, path_reader.readPath("a"));
+    }
+    // A reserved byte where an entry should be is reported before container size limits.
+    {
+        const array = [_]u8{ 0xE8, 0xFA, 0xEA };
+        const object = [_]u8{ 0xE9, 0xFA, 0xEA };
+        const Limited = Reader(.{ .max_array_length = 0, .max_object_size = 0 });
+        var r1 = Limited.init(&array);
+        try std.testing.expectError(error.InvalidEnumTag, r1.readPath("[0]"));
+        var r2 = Limited.init(&object);
+        try std.testing.expectError(error.InvalidEnumTag, r2.readPath("a"));
+        var q1 = [_]bufzilla.PathQuery{ .{ .path = "[0]" }, .{ .path = "[1]" } };
+        var r3 = Limited.init(&array);
+        try std.testing.expectError(error.InvalidEnumTag, r3.readPaths(&q1));
+        var q2 = [_]bufzilla.PathQuery{ .{ .path = "a" }, .{ .path = "b" } };
+        var r4 = Limited.init(&object);
+        try std.testing.expectError(error.InvalidEnumTag, r4.readPaths(&q2));
+    }
+    // Every other byte is a valid tag.
+    var valid: usize = 0;
+    for (0..256) |byte| valid += @intFromBool(Common.decodeTag(@intCast(byte)) != null);
+    try std.testing.expectEqual(@as(usize, 250), valid);
 }
 
 test "writer/reader: typedArray roundtrip and skipping" {
@@ -223,9 +361,9 @@ test "writer/reader: typedArray roundtrip and skipping" {
         const written = fixed.buffered();
 
         // Verify header: tag + subtype + count(1 byte)
-        const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.typedArray))), decoded.tag);
-        try std.testing.expectEqual(@as(u3, 0), decoded.data); // count fits in 1 byte
+        const decoded = Common.decodeTag(written[0]).?;
+        try std.testing.expectEqual(Common.Kind.typedArray, decoded.kind);
+        try std.testing.expectEqual(@as(u8, 0), decoded.data); // count fits in 1 byte
 
         var reader = Reader(.{}).init(written);
         const ta_val = try reader.read();
@@ -273,14 +411,14 @@ test "writer/reader: typedArray roundtrip and skipping" {
 }
 
 test "reader: typedArray invalid subtype" {
-    const tag = Common.encodeTag(@backingInt(Value.typedArray), 0); // count varint is 1 byte
+    const tag = Common.encodeTag(.typedArray, 0); // count varint is 1 byte
     const buf = &[_]u8{ tag, 0xFF }; // invalid subtype, missing count/payload is fine
     var reader = Reader(.{}).init(buf);
     try std.testing.expectError(error.InvalidEnumTag, reader.read());
 }
 
 test "reader: typedArray truncated payload errors" {
-    const tag = Common.encodeTag(@backingInt(Value.typedArray), 0); // count varint is 1 byte
+    const tag = Common.encodeTag(.typedArray, 0); // count varint is 1 byte
     const subtype: u8 = @backingInt(Common.TypedArrayElem.f32);
     const count: u8 = 2; // expects 8 payload bytes
     const buf = &[_]u8{ tag, subtype, count, 0, 0, 0, 0 }; // only 4 payload bytes present
@@ -289,7 +427,7 @@ test "reader: typedArray truncated payload errors" {
 }
 
 test "reader: typedArray respects max_bytes_length" {
-    const tag = Common.encodeTag(@backingInt(Value.typedArray), 0); // count varint is 1 byte
+    const tag = Common.encodeTag(.typedArray, 0); // count varint is 1 byte
     const subtype: u8 = @backingInt(Common.TypedArrayElem.u32);
     const count: u8 = 3; // payload is 12 bytes
     const payload: [12]u8 = @splat(0);
@@ -1258,7 +1396,7 @@ test "consistency: allocating and fixed produce identical output" {
 
 test "reader: containerEnd at depth 0" {
     // malformed: a containerEnd tag without any preceding container
-    const containerEndTag = Common.encodeTag(@backingInt(Value.containerEnd), 0);
+    const containerEndTag = Common.encodeTag(.containerEnd, 0);
     const malformed = &[_]u8{containerEndTag};
 
     var reader = Reader(.{}).init(malformed);
@@ -1278,7 +1416,7 @@ test "reader: nested containerEnd underflow" {
     const written = fixed.buffered();
     var malformed: [33]u8 = undefined;
     @memcpy(malformed[0..written.len], written);
-    malformed[written.len] = Common.encodeTag(@backingInt(Value.containerEnd), 0);
+    malformed[written.len] = Common.encodeTag(.containerEnd, 0);
 
     var reader = Reader(.{}).init(malformed[0 .. written.len + 1]);
 
@@ -1290,7 +1428,7 @@ test "reader: nested containerEnd underflow" {
 
 test "reader: malformed varIntBytes length" {
     // malformed input with varIntBytes tag and a huge length that would overflow if added to pos.
-    const varIntBytesTag = Common.encodeTag(@backingInt(Value.varIntBytes), 3);
+    const varIntBytesTag = Common.encodeTag(.varIntBytes, 3);
 
     // large length (0xFFFFFFFF = ~4GB) that can cause overflow
     var malformed: [5]u8 = undefined;
@@ -1310,8 +1448,8 @@ test "reader: malformed varIntBytes length" {
 }
 
 test "reader: skipValue checks fixed-width payload bounds" {
-    const f64_tag = Common.encodeTag(@backingInt(Value.f64), 0);
-    const u32_tag = Common.encodeTag(@backingInt(Value.u32), 0);
+    const f64_tag = Common.encodeTag(.f64, 0);
+    const u32_tag = Common.encodeTag(.u32, 0);
 
     {
         const malformed = &[_]u8{f64_tag};
@@ -1328,7 +1466,7 @@ test "reader: skipValue checks fixed-width payload bounds" {
 
 test "reader: malicious bytes length causes BytesTooLong" {
     // malformed input: bytes tag and a huge 8-byte length
-    const bytesTag = Common.encodeTag(@backingInt(Value.bytes), 0);
+    const bytesTag = Common.encodeTag(.bytes, 0);
 
     // 1 byte tag + 8 bytes for u64 length
     var malformed: [9]u8 = undefined;
@@ -1515,25 +1653,24 @@ test "writer/reader: u64 max value" {
     try std.testing.expectEqual(val, read_val.u64);
 }
 
-test "writer/reader: smallUint encodes 0..7" {
+test "writer/reader: smallUint encodes 0..63" {
     var buffer: [16]u8 = undefined;
     var fixed = Io.Writer.fixed(&buffer);
     var writer = Writer.init(&fixed);
 
-    try writer.writeAny(@as(u64, 7));
+    try writer.writeAny(@as(u64, 63));
 
     const written = fixed.buffered();
     try std.testing.expectEqual(@as(usize, 1), written.len);
 
-    const decoded = Common.decodeTag(written[0]);
-    const tag = std.enums.fromInt(std.meta.Tag(Value), decoded.tag) orelse return error.InvalidEnumTag;
-    try std.testing.expectEqual(std.meta.Tag(Value).smallUint, tag);
-    try std.testing.expectEqual(@as(u3, 7), decoded.data);
+    const decoded = Common.decodeTag(written[0]).?;
+    try std.testing.expectEqual(Common.Kind.smallUint, decoded.kind);
+    try std.testing.expectEqual(@as(u8, 63), decoded.data);
 
     var reader = Reader(.{}).init(written);
     const read_val = try reader.read();
     try std.testing.expect(read_val == .u64);
-    try std.testing.expectEqual(@as(u64, 7), read_val.u64);
+    try std.testing.expectEqual(@as(u64, 63), read_val.u64);
 }
 
 // =============================================================================

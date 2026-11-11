@@ -243,12 +243,41 @@ test "c api: write_value writes exactly the encoding its tag selects" {
     try expectEqual(std.math.minInt(i64), value.data.i64_value);
 }
 
+test "c api: write_value accepts small values at their limits" {
+    const limits = [_]c.BufzillaValue{
+        .{ .tag = tagOf(.smallUint), .data = .{ .small_value = 63 } },
+        .{ .tag = tagOf(.smallIntPositive), .data = .{ .small_value = 63 } },
+        .{ .tag = tagOf(.smallIntNegative), .data = .{ .small_value = 32 } },
+        .{ .tag = tagOf(.smallBytes), .data = .{ .bytes = bytes("thirty-one bytes, at the limit.") } },
+    };
+    var out: [64]u8 = undefined;
+    var writer: c.BufzillaWriter = undefined;
+    try initWriter(&writer, &out);
+    for (&limits) |*value| try ok(c.bufzilla_writer_write_value(&writer, value));
+    try expectEqual(@as(usize, 1 + 1 + 1 + 1 + 31), c.bufzilla_writer_written(&writer));
+
+    var reader: c.BufzillaReader = undefined;
+    try ok(c.bufzilla_reader_init(&reader, bytes(writtenBytes(&writer, &out))));
+    var value: c.BufzillaValue = undefined;
+    var int: i64 = undefined;
+    for ([_]i64{ 63, 63, -32 }) |expected| {
+        try ok(c.bufzilla_reader_read(&reader, &value));
+        try ok(c.bufzilla_value_as_int(&value, &int));
+        try expectEqual(expected, int);
+    }
+    try ok(c.bufzilla_reader_read(&reader, &value));
+    var span: c.BufzillaBytes = undefined;
+    try ok(c.bufzilla_value_as_bytes(&value, &span));
+    try expectEqualStrings("thirty-one bytes, at the limit.", sliceOf(span));
+}
+
 test "c api: write_value rejects payloads out of range for their tag" {
     const invalid = [_]c.BufzillaValue{
-        .{ .tag = tagOf(.smallBytes), .data = .{ .bytes = bytes("8 bytes!") } },
-        .{ .tag = tagOf(.smallIntPositive), .data = .{ .small_value = 8 } },
+        .{ .tag = tagOf(.smallBytes), .data = .{ .bytes = bytes("thirty-two bytes, one over limit") } },
+        .{ .tag = tagOf(.smallIntPositive), .data = .{ .small_value = 64 } },
         .{ .tag = tagOf(.smallIntNegative), .data = .{ .small_value = 0 } },
-        .{ .tag = tagOf(.smallUint), .data = .{ .small_value = 8 } },
+        .{ .tag = tagOf(.smallIntNegative), .data = .{ .small_value = 33 } },
+        .{ .tag = tagOf(.smallUint), .data = .{ .small_value = 64 } },
         .{ .tag = tagOf(.varIntSignedPositive), .data = .{ .i64_value = -1 } },
         .{ .tag = tagOf(.varIntSignedNegative), .data = .{ .i64_value = 0 } },
         .{ .tag = tagOf(.bool), .data = .{ .bool_value = 2 } },
@@ -622,7 +651,7 @@ test "c api: value accessors accept every encoding of a type" {
     try expectEqual(@as(i64, 200), int);
     try expectStatus(.out_of_range, c.bufzilla_value_as_int(&.{ .tag = tagOf(.u64), .data = .{ .u64_value = std.math.maxInt(u64) } }, &int));
     try expectStatus(.type_mismatch, c.bufzilla_value_as_int(&.{ .tag = tagOf(.f64), .data = .{ .f64_value = 1 } }, &int));
-    try expectStatus(.invalid_argument, c.bufzilla_value_as_int(&.{ .tag = tagOf(.smallUint), .data = .{ .small_value = 9 } }, &int));
+    try expectStatus(.invalid_argument, c.bufzilla_value_as_int(&.{ .tag = tagOf(.smallUint), .data = .{ .small_value = 64 } }, &int));
 
     try ok(c.bufzilla_value_as_uint(&.{ .tag = tagOf(.varIntUnsigned), .data = .{ .u64_value = std.math.maxInt(u64) } }, &uint));
     try expectEqual(@as(u64, std.math.maxInt(u64)), uint);
