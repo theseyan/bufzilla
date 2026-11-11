@@ -95,8 +95,8 @@ fn measureLibrary(
     return measured;
 }
 
-fn printCell(result: ?harness.Result, reference: ?harness.Result) void {
-    const r = result orelse return std.debug.print("  {s:<20}", .{"-"});
+fn printCell(out: *Io.Writer, result: ?harness.Result, reference: ?harness.Result) Io.Writer.Error!void {
+    const r = result orelse return out.print("  {s:<20}", .{"-"});
     var time_buf: [32]u8 = undefined;
     var cell_buf: [64]u8 = undefined;
     const time = harness.formatTime(&time_buf, r.median_ns);
@@ -104,7 +104,7 @@ fn printCell(result: ?harness.Result, reference: ?harness.Result) void {
         std.fmt.bufPrint(&cell_buf, "{s} ({d:.1}x)", .{ time, r.median_ns / ref.median_ns }) catch unreachable
     else
         time;
-    std.debug.print("  {s:<20}", .{cell});
+    try out.print("  {s:<20}", .{cell});
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -120,21 +120,27 @@ pub fn main(init: std.process.Init) !void {
     for (&buffers) |*b| b.* = try gpa.alloc(u8, 4 << 20);
     defer for (buffers) |b| gpa.free(b);
 
+    // Results go to stdout, so that `--csv > results.csv` captures them; errors go to stderr.
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
+    const out = &stdout.interface;
+
     harness.warmUpCpu(init.io);
     if (args.csv) {
-        std.debug.print("dataset,library,format,size,operation,median_ns,min_ns,spread,mib_per_s\n", .{});
+        try out.print("dataset,library,format,size,operation,median_ns,min_ns,spread,mib_per_s\n", .{});
     } else {
-        std.debug.print("\nZig serialization libraries on the same data ({s}, {s}-{s}, {s})\n", .{ @tagName(builtin.mode), @tagName(builtin.cpu.arch), @tagName(builtin.os.tag), builtin.cpu.model.name });
-        std.debug.print("time per operation: median of {d} samples; (Nx) = time relative to bufzilla\n", .{options.samples});
+        try out.print("\nZig serialization libraries on the same data ({s}, {s}-{s}, {s})\n", .{ @tagName(builtin.mode), @tagName(builtin.cpu.arch), @tagName(builtin.os.tag), builtin.cpu.model.name });
+        try out.print("time per operation: median of {d} samples; (Nx) = time relative to bufzilla\n", .{options.samples});
     }
 
     inline for (kinds) |kind| {
         if (!args.csv) {
-            std.debug.print("\n{s}: {s}\n  {s:<14} {s:<12} {s:>9}  {s:<20}  {s:<20}  {s:<20}\n", .{
+            try out.print("\n{s}: {s}\n  {s:<14} {s:<12} {s:>9}  {s:<20}  {s:<20}  {s:<20}\n", .{
                 @tagName(kind),                          kind.description(), "library", "format", "size", "encode", "decode (all values)",
                 "access " ++ comptime kind.accessPath(),
             });
         }
+        try out.flush();
         var reference: ?Measured = null;
         inline for (libraries) |Lib| {
             if (args.selected(Lib.name)) {
@@ -143,21 +149,23 @@ pub fn main(init: std.process.Init) !void {
                 if (args.csv) {
                     inline for (.{ "encode", "decode", "access" }, 0..) |op_name, i| {
                         if (m.results[i]) |r| {
-                            std.debug.print("{s},{s},{s},{d},{s},{d:.1},{d:.1},{d:.3},{d:.1}\n", .{ @tagName(kind), Lib.name, Lib.format, m.size, op_name, r.median_ns, r.min_ns, r.spread, r.mibPerSec(m.size) });
+                            try out.print("{s},{s},{s},{d},{s},{d:.1},{d:.1},{d:.3},{d:.1}\n", .{ @tagName(kind), Lib.name, Lib.format, m.size, op_name, r.median_ns, r.min_ns, r.spread, r.mibPerSec(m.size) });
                         }
                     }
                 } else {
-                    std.debug.print("  {s:<14} {s:<12} {d:>7} B", .{ Lib.name, Lib.format, m.size });
+                    try out.print("  {s:<14} {s:<12} {d:>7} B", .{ Lib.name, Lib.format, m.size });
                     const is_reference = std.mem.eql(u8, Lib.name, "bufzilla");
-                    for (m.results, 0..) |r, i| printCell(r, if (is_reference or reference == null) null else reference.?.results[i]);
-                    std.debug.print("\n", .{});
+                    for (m.results, 0..) |r, i| try printCell(out, r, if (is_reference or reference == null) null else reference.?.results[i]);
+                    try out.writeAll("\n");
                 }
+                try out.flush();
             }
         }
     }
 
     if (!args.csv) {
-        std.debug.print("\nHow each library is used:\n", .{});
-        inline for (libraries) |Lib| std.debug.print("  {s}: {s}.\n", .{ Lib.name, Lib.strategy });
+        try out.writeAll("\nHow each library is used:\n");
+        inline for (libraries) |Lib| try out.print("  {s}: {s}.\n", .{ Lib.name, Lib.strategy });
     }
+    try out.flush();
 }

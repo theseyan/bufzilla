@@ -2,6 +2,11 @@
 //! bufzilla itself does not depend on them.
 //!
 //!     cd bench/compare && zig build run -Doptimize=ReleaseFast
+//!
+//! To update the README's chart (misc/bench-{light,dark}.svg) and tables from a run:
+//!
+//!     zig build run -Doptimize=ReleaseFast -- --csv > results.csv
+//!     zig build chart -- results.csv ../../misc --machine="<machine>"
 
 const std = @import("std");
 
@@ -33,4 +38,20 @@ pub fn build(b: *std.Build) void {
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run the comparison benchmarks").dependOn(&run.step);
+
+    // Renders results (from `run -- --csv`) as the README's chart and tables; see `src/chart.zig`.
+    const chart = b.addExecutable(.{
+        .name = "bufzilla-compare-chart",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/chart.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = true,
+    });
+    const run_chart = b.addRunArtifact(chart);
+    run_chart.addPassthruArgs();
+    // Paths given to the chart tool are relative to this directory.
+    run_chart.setCwd(b.path("."));
+    b.step("chart", "Render benchmark results as the README's chart and tables").dependOn(&run_chart.step);
 }

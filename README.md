@@ -381,48 +381,57 @@ zig build bench-large -Doptimize=fast  # path lookups and updates in a 4 MiB doc
 cd bench/compare && zig build run -Doptimize=fast   # bufzilla vs other Zig serialization libraries
 ```
 
-They time each operation in calibrated batches and report the median of 15 samples, with the spread (interquartile range) to show how stable a result is. Setup, such as building inputs and encoding data to decode, happens outside the timed region.
+They time each operation in calibrated batches and report the median of 15 samples, with the spread (interquartile range) to show how stable a result is. Setup, such as building inputs and encoding data to decode, happens outside the timed region. Results go to stdout.
 
-The comparison ([`bench/compare`](bench/compare)) encodes the same datasets (a record, 1000 records, a 768-float vector) with bufzilla, [zbor](https://github.com/r4gus/zbor) (CBOR), [zig-msgpack](https://github.com/zigcc/zig-msgpack) (MessagePack), [zig-protobuf](https://github.com/Arwalk/zig-protobuf) (Protobuf) and `std.json`. It measures encoded size, encoding, decoding every value, and reading a single field. Before timing, each library's decode must reproduce a checksum of the whole dataset, so every library does the same, complete work. It is a separate package, so bufzilla does not depend on these libraries.
+The comparison ([`bench/compare`](bench/compare)) encodes the same datasets (a record, 1000 records, a 768-float vector) with bufzilla, [zbor](https://github.com/r4gus/zbor) (CBOR), [zig-msgpack](https://github.com/zigcc/zig-msgpack) (MessagePack), [zig-protobuf](https://github.com/Arwalk/zig-protobuf) (Protobuf) and `std.json`. It measures encoded size, encoding, decoding every value, and reading a single field. Before timing, each library's decode must reproduce a checksum of the whole dataset, so every library does the same, complete work. It is a separate package, so bufzilla does not depend on these libraries. The chart and tables below are generated from its results (`zig build chart` writes the chart's light and dark versions and prints the tables):
+
+```bash
+cd bench/compare
+zig build run -Doptimize=fast -- --csv > results.csv
+zig build chart -- results.csv ../../misc --machine="Apple M4, macOS, Zig 0.17.1"
+```
 
 **bufzilla is competitive in performance with similar self-describing binary formats, and in most cases, much faster.**
-![Benchmark Comparison](misc/bench.png)
-*Avg. throughput (ops/sec): [bufzilla](https://github.com/theseyan/bufzilla) vs [zbor](https://github.com/r4gus/zbor) vs [zig-msgpack](https://github.com/zigcc/zig-msgpack)*
 
-Comparison results on an Apple M4 (macOS, `-Doptimize=fast`, Zig 0.17.1). Times are medians of 15 samples; in parentheses, the time relative to bufzilla.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="misc/bench-dark.svg">
+  <img alt="Bar charts of the time per operation of bufzilla, zbor, zig-msgpack, zig-protobuf, std.json and simdjzon: encoding, decoding every value and reading one field, for one record, 1000 records and a 768-float vector. The same numbers are in the tables below." src="misc/bench-light.svg">
+</picture>
+
+Results on an Apple M4 (macOS, `-Doptimize=fast`, Zig 0.17.1). Times are medians of 15 samples, and the middle of three runs; in parentheses, the time relative to bufzilla.
 
 **One record** (strings, integers, a float, a nested object and arrays)
 
 | Library | Format | Size | Encode | Decode (all values) | Read `address.city` |
 |---|---|---:|---:|---:|---:|
-| bufzilla | bufzilla | 208 B | 65 ns | 119 ns | 49 ns |
-| zbor | CBOR | 206 B | 157 ns (2.4x) | 497 ns (4.2x) | 233 ns (4.7x) |
-| zig-msgpack | MessagePack | 200 B | 140 ns (2.1x) | 478 ns (4.0x) | 450 ns (9.2x) |
-| zig-protobuf | Protobuf | 127 B | 79 ns (1.2x) | 150 ns (1.3x) | 107 ns (2.2x) |
-| std.json | JSON | 265 B | 297 ns (4.6x) | 716 ns (6.0x) | 704 ns (14x) |
-| simdjzon¹ | JSON | 265 B | - | 325 ns (2.7x) | 266 ns (5.4x) |
+| bufzilla | bufzilla | 208 B | 65 ns | 119 ns | 51 ns |
+| zbor | CBOR | 206 B | 159 ns (2.4×) | 499 ns (4.2×) | 214 ns (4.2×) |
+| zig-msgpack | MessagePack | 200 B | 138 ns (2.1×) | 475 ns (4.0×) | 450 ns (8.8×) |
+| zig-protobuf | Protobuf | 127 B | 82 ns (1.3×) | 151 ns (1.3×) | 108 ns (2.1×) |
+| std.json | JSON | 265 B | 311 ns (4.8×) | 641 ns (5.4×) | 621 ns (12×) |
+| simdjzon¹ | JSON | 265 B | - | 328 ns (2.8×) | 267 ns (5.2×) |
 
 **1000 records**
 
 | Library | Format | Size | Encode | Decode (all values) | Read `[500].username` |
 |---|---|---:|---:|---:|---:|
-| bufzilla | bufzilla | 204,407 B | 61.6 µs | 163.7 µs | 31.9 µs |
-| zbor | CBOR | 203,331 B | 183.9 µs (3.0x) | 626.9 µs (3.8x) | 149.7 µs (4.7x) |
-| zig-msgpack | MessagePack | 202,284 B | 172.7 µs (2.8x) | 492.0 µs (3.0x) | 431.3 µs (13.5x) |
-| zig-protobuf | Protobuf | 126,556 B | 100.0 µs (1.6x) | 166.9 µs (1.0x) | 5.5 µs (0.17x) |
-| std.json | JSON | 266,738 B | 324.0 µs (5.3x) | 675.5 µs (4.1x) | 665.9 µs (21x) |
-| simdjzon¹ | JSON | 266,738 B | - | 313.7 µs (1.9x) | 222.3 µs (7.0x) |
+| bufzilla | bufzilla | 204,407 B | 63.6 µs | 165.2 µs | 35.0 µs |
+| zbor | CBOR | 203,331 B | 180.4 µs (2.8×) | 656.0 µs (4.0×) | 156.4 µs (4.5×) |
+| zig-msgpack | MessagePack | 202,284 B | 172.4 µs (2.7×) | 491.6 µs (3.0×) | 431.5 µs (12×) |
+| zig-protobuf | Protobuf | 126,556 B | 98.8 µs (1.6×) | 168.2 µs (1.0×) | 5.64 µs (0.16×) |
+| std.json | JSON | 266,738 B | 316.0 µs (5.0×) | 626.7 µs (3.8×) | 637.5 µs (18×) |
+| simdjzon¹ | JSON | 266,738 B | - | 319.9 µs (1.9×) | 221.6 µs (6.3×) |
 
 **A 768-float vector embedding**
 
 | Library | Format | Size | Encode | Decode (all values) | Read `values[700]` |
 |---|---|---:|---:|---:|---:|
-| bufzilla | bufzilla | 3,118 B | 69 ns | 377 ns | 24 ns |
-| zbor | CBOR | 3,885 B | 1.61 µs (23x) | 13.27 µs (35x) | 10.42 µs (442x) |
-| zig-msgpack | MessagePack | 3,884 B | 2.91 µs (42x) | 6.57 µs (17x) | 5.30 µs (225x) |
-| zig-protobuf | Protobuf | 3,101 B | 2.16 µs (31x) | 2.90 µs (7.7x) | 2.41 µs (102x) |
-| std.json | JSON | 15,220 B | 16.65 µs (241x) | 26.10 µs (69x) | 26.23 µs (1113x) |
-| simdjzon¹ | JSON | 15,220 B | - | 20.87 µs (55x) | 19.41 µs (824x) |
+| bufzilla | bufzilla | 3,118 B | 70 ns | 378 ns | 24 ns |
+| zbor | CBOR | 3,885 B | 1.60 µs (23×) | 13.2 µs (35×) | 10.6 µs (446×) |
+| zig-msgpack | MessagePack | 3,884 B | 3.06 µs (44×) | 6.67 µs (18×) | 5.42 µs (229×) |
+| zig-protobuf | Protobuf | 3,101 B | 2.17 µs (31×) | 3.09 µs (8.2×) | 2.41 µs (102×) |
+| std.json | JSON | 15,220 B | 17.1 µs (243×) | 26.8 µs (71×) | 26.2 µs (1105×) |
+| simdjzon¹ | JSON | 15,220 B | - | 21.2 µs (56×) | 19.3 µs (815×) |
 
 Notes:
 - Decoding reads every value. bufzilla reads them in place, without copying; the others build structs or a tree of values (in an arena). bufzilla, zbor and zig-protobuf read a single field lazily; the others decode the whole document first.

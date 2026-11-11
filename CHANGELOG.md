@@ -62,6 +62,8 @@ Measured with A/B benchmarks against the previous code, Apple Silicon, ReleaseFa
 ### Benchmarks
 - Rewrote the benchmark suite: each operation is timed in calibrated batches and reported as the median of 15 samples with its spread, and setup is no longer timed (the object benchmarks used to format keys inside the timed loop). The benchmark programs accept `--csv`, `--quick` and `--filter=<text>`.
 - Added `bench/compare`, comparing bufzilla with zbor, zig-msgpack, zig-protobuf and `std.json` on the same datasets. Checksums verify that every library decodes the complete data.
+- The README's chart is generated from `bench/compare` results by `zig build chart`, which writes light and dark versions (`misc/bench-light.svg`, `misc/bench-dark.svg`) and prints the README's tables, so that both come from the same run. It shows time per operation for each dataset and operation, instead of an average throughput across them.
+- Benchmark output, including `--csv`, goes to stdout.
 
 ### Build
 - `-Dno-llvm` is ignored on aarch64 targets, where Zig's self-hosted backend is not ready yet; LLVM is always used there.

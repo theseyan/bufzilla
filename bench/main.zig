@@ -474,20 +474,24 @@ const cases = .{
 pub fn main(init: std.process.Init) !void {
     const args = try harness.Args.parse(init);
     const options = args.options();
+    // Results go to stdout, so that `--csv > results.csv` captures them.
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
+    const out = &stdout.interface;
     harness.warmUpCpu(init.io);
 
     if (args.csv) {
-        std.debug.print("group,benchmark,median_ns,min_ns,spread,bytes,mib_per_s\n", .{});
+        try out.print("group,benchmark,median_ns,min_ns,spread,bytes,mib_per_s\n", .{});
     } else {
-        std.debug.print("\nbufzilla micro-benchmarks ({s})\n", .{@tagName(@import("builtin").mode)});
-        std.debug.print("time per operation: median of {d} samples; spread: interquartile range / median\n", .{options.samples});
-        std.debug.print("size: encoded bytes written or read (reads are zero-copy and need not touch every byte)\n", .{});
+        try out.print("\nbufzilla micro-benchmarks ({s})\n", .{@tagName(@import("builtin").mode)});
+        try out.print("time per operation: median of {d} samples; spread: interquartile range / median\n", .{options.samples});
+        try out.print("size: encoded bytes written or read (reads are zero-copy and need not touch every byte)\n", .{});
     }
 
     inline for (cases) |group| {
         var any_selected = false;
         inline for (group[1]) |case| any_selected = any_selected or args.selected(case[0]);
-        if (any_selected and !args.csv) std.debug.print("\n{s}\n  {s:<34} {s:>11} {s:>8} {s:>8}\n", .{ group[0], "", "time/op", "size", "spread" });
+        if (any_selected and !args.csv) try out.print("\n{s}\n  {s:<34} {s:>11} {s:>8} {s:>8}\n", .{ group[0], "", "time/op", "size", "spread" });
         inline for (group[1]) |case| {
             if (args.selected(case[0])) {
                 var state: case[1] = .{};
@@ -496,11 +500,12 @@ pub fn main(init: std.process.Init) !void {
                 const size = state.bytes();
                 if (args.csv) {
                     // Names are quoted: some contain commas.
-                    std.debug.print("\"{s}\",\"{s}\",{d:.2},{d:.2},{d:.3},{d},{d:.1}\n", .{ group[0], case[0], result.median_ns, result.min_ns, result.spread, size, result.mibPerSec(size) });
+                    try out.print("\"{s}\",\"{s}\",{d:.2},{d:.2},{d:.3},{d},{d:.1}\n", .{ group[0], case[0], result.median_ns, result.min_ns, result.spread, size, result.mibPerSec(size) });
                 } else {
                     var time_buf: [32]u8 = undefined;
-                    std.debug.print("  {s:<34} {s:>11} {d:>6} B {d:>7.1}%\n", .{ case[0], harness.formatTime(&time_buf, result.median_ns), size, result.spread * 100 });
+                    try out.print("  {s:<34} {s:>11} {d:>6} B {d:>7.1}%\n", .{ case[0], harness.formatTime(&time_buf, result.median_ns), size, result.spread * 100 });
                 }
+                try out.flush();
             }
         }
     }

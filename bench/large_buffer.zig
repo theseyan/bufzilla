@@ -98,13 +98,17 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "missing key (full scan)", .path = "data.nonexistent", .found = false, .whole = true },
     };
 
+    // Results go to stdout, so that `--csv > results.csv` captures them.
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
+    const output = &stdout.interface;
     harness.warmUpCpu(init.io);
     if (args.csv) {
-        std.debug.print("benchmark,median_ns,min_ns,spread,document_bytes,mib_per_s\n", .{});
+        try output.print("benchmark,median_ns,min_ns,spread,document_bytes,mib_per_s\n", .{});
     } else {
-        std.debug.print("\nreadPath and applyUpdates in a {d:.2} MiB document ({d} items, {s})\n", .{ @as(f64, @floatFromInt(data.len)) / (1024 * 1024), item_count, @tagName(@import("builtin").mode) });
-        std.debug.print("scan rate: document size / time, for operations that read past the whole document\n", .{});
-        std.debug.print("\n  {s:<40} {s:>11} {s:>14} {s:>8}\n", .{ "", "time/op", "scan rate", "spread" });
+        try output.print("\nreadPath and applyUpdates in a {d:.2} MiB document ({d} items, {s})\n", .{ @as(f64, @floatFromInt(data.len)) / (1024 * 1024), item_count, @tagName(@import("builtin").mode) });
+        try output.print("scan rate: document size / time, for operations that read past the whole document\n", .{});
+        try output.print("\n  {s:<40} {s:>11} {s:>14} {s:>8}\n", .{ "", "time/op", "scan rate", "spread" });
     }
 
     for (lookups) |lookup| {
@@ -113,28 +117,29 @@ pub fn main(init: std.process.Init) !void {
         if ((try reader.readPath(lookup.path) != null) != lookup.found) return error.UnexpectedResult;
         var state: Lookup = .{ .data = data, .path = lookup.path };
         const result = try harness.measure(init.io, &state, Lookup.run, options);
-        report(args, lookup.name, result, data.len, lookup.whole);
+        try report(output, args, lookup.name, result, data.len, lookup.whole);
     }
 
     if (args.selected("applyUpdates")) {
         var state: Update = .{ .data = data, .out = out };
         const result = try harness.measure(init.io, &state, Update.run, options);
-        report(args, "applyUpdates (3 updates, whole document)", result, data.len, true);
+        try report(output, args, "applyUpdates (3 updates, whole document)", result, data.len, true);
     }
 }
 
-fn report(args: harness.Args, name: []const u8, result: harness.Result, bytes: usize, whole: bool) void {
+fn report(out: *Io.Writer, args: harness.Args, name: []const u8, result: harness.Result, bytes: usize, whole: bool) Io.Writer.Error!void {
     const rate = if (whole) result.mibPerSec(bytes) else 0;
     if (args.csv) {
         // The name is quoted: some contain commas.
-        std.debug.print("\"{s}\",{d:.2},{d:.2},{d:.3},{d},{d:.1}\n", .{ name, result.median_ns, result.min_ns, result.spread, bytes, rate });
-        return;
-    }
-    var time_buf: [32]u8 = undefined;
-    const time = harness.formatTime(&time_buf, result.median_ns);
-    if (whole) {
-        std.debug.print("  {s:<40} {s:>11} {d:>8.0} MiB/s {d:>7.1}%\n", .{ name, time, rate, result.spread * 100 });
+        try out.print("\"{s}\",{d:.2},{d:.2},{d:.3},{d},{d:.1}\n", .{ name, result.median_ns, result.min_ns, result.spread, bytes, rate });
     } else {
-        std.debug.print("  {s:<40} {s:>11} {s:>14} {d:>7.1}%\n", .{ name, time, "-", result.spread * 100 });
+        var time_buf: [32]u8 = undefined;
+        const time = harness.formatTime(&time_buf, result.median_ns);
+        if (whole) {
+            try out.print("  {s:<40} {s:>11} {d:>8.0} MiB/s {d:>7.1}%\n", .{ name, time, rate, result.spread * 100 });
+        } else {
+            try out.print("  {s:<40} {s:>11} {s:>14} {d:>7.1}%\n", .{ name, time, "-", result.spread * 100 });
+        }
     }
+    try out.flush();
 }
