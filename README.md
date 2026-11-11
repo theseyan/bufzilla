@@ -19,7 +19,7 @@ bufzilla is ideal for serializing JSON-like objects and arrays, and has the foll
 
 ## Installation
 
-- Zig version: `0.15.2`
+- Zig version: `0.17.1`
 
 ```sh
 zig fetch https://github.com/theseyan/bufzilla/archive/refs/tags/{VERSION}.tar.gz
@@ -121,7 +121,7 @@ try writer.endContainer(); // end object
 When all elements of an array have the same numeric type, and the length is known upfront, you can use a packed typed array which is much more space-efficient:
 
 ```zig
-const vec = [_]f32{1.0} ** 768;
+const vec: [768]f32 = @splat(1.0);
 try writer.writeTypedArray(&vec);
 ```
 
@@ -154,7 +154,18 @@ Note:
 - Paths follow the same syntax as `Reader.readPath`.
 - `Update.init` takes a pointer; the pointed-to value must stay alive for the duration of `applyUpdates`.
 - Missing keys/indices are inserted in the output encoding.
+- If several updates target the same path, the last one wins.
+- Array-extension updates (e.g. `arr[5]` on a shorter or missing array) fill gaps with nulls, and are capped at `max_array_length` elements to guard against unbounded output from untrusted paths. The default cap is 1,048,576; use `applyUpdatesWithLimits` with `.max_array_length = null` for unlimited extension.
+- The cap applies to arrays created or extended by paths, including nested arrays. Existing arrays that are not extended and values supplied as whole-array replacements are not subject to this cap.
 - Errors are returned as `Writer.Error || ReadError || ApplyUpdatesError`.
+- Updates stream output as they run. On error, discard the partial encoding; limit checks occur before padding the rejected array, but earlier output may already have been written.
+
+```zig
+var out_writer = Writer.init(&aw.writer);
+try out_writer.applyUpdatesWithLimits(encoded_bytes, updates[0..], .{
+    .max_array_length = 10_000,
+});
+```
 
 ### Inspecting encoded data as JSON
 
@@ -254,6 +265,8 @@ const value = try reader.readPath("data['key.with.dots']");
 const missing = try reader.readPath("nonexistent.path"); // null
 ```
 
+Paths have at most 64 segments (`bufzilla.Path.max_segments`); longer paths are treated as malformed. This bounds the stack used by path lookups and updates, which recurse once per segment.
+
 For reading many paths efficiently, use `readPaths` to scan the buffer once:
 
 ```zig
@@ -325,17 +338,41 @@ zig build test
 
 ## C API
 
-`zig build` installs both static and dynamic C libraries plus `bufzilla.h`:
+`zig build` installs static and dynamic C libraries plus [`bufzilla.h`](include/bufzilla.h), which documents every function:
 
 ```bash
-zig build
+zig build -Doptimize=fast
 ```
 
-C callers include `bufzilla.h`, allocate `bufzilla_writer` / `bufzilla_reader` state themselves, and provide all encode/decode output buffers and scratch memory. The C API does not allocate internally.
+The C API never allocates: callers own the writer and reader state, output buffers and scratch memory. Every function that can fail returns a `bufzilla_status`, and `bufzilla_status_string` describes it.
+
+```c
+#include <bufzilla.h>
+
+uint8_t buf[256];
+bufzilla_writer w;
+bufzilla_writer_init(&w, bufzilla_mutable_bytes_of(buf, sizeof buf));
+bufzilla_writer_start_object(&w);
+bufzilla_writer_write_bytes(&w, bufzilla_bytes_of("age", 3));
+bufzilla_writer_write_int(&w, 30);
+bufzilla_writer_end_container(&w);
+
+bufzilla_reader r;
+bufzilla_value value;
+bool found;
+int64_t age;
+bufzilla_reader_init(&r, bufzilla_bytes_of(buf, bufzilla_writer_written(&w)));
+if (bufzilla_reader_read_path(&r, bufzilla_bytes_of("age", 3), &value, &found) == BUFZILLA_OK && found &&
+    bufzilla_value_as_int(&value, &age) == BUFZILLA_OK) {
+    printf("age = %lld\n", (long long)age);
+}
+```
+
+A failed write leaves the writer unchanged, and a failed read leaves the reader unchanged. See [`test/c_api_smoke.c`](test/c_api_smoke.c) for a complete program covering iteration, path queries, updates, typed arrays and JSON rendering.
 
 ## Benchmarks
 
-Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=ReleaseFast`.
+Run the [benchmark suite](https://github.com/theseyan/bufzilla/blob/main/bench/main.zig) with `zig build bench -Doptimize=fast`.
 
 **bufzilla is competitive in performance with similar self-describing binary formats, and in most cases, much faster.**
 ![Benchmark Comparison](misc/bench.png)

@@ -127,6 +127,39 @@ pub inline fn typedArrayElemSize(elem: TypedArrayElem) usize {
     };
 }
 
+/// The value of any integer encoding, widened; null if `value` is not an integer.
+pub fn integerValue(value: Value) ?i128 {
+    return switch (value) {
+        .u64, .varIntUnsigned => |v| v,
+        .u32 => |v| v,
+        .u16 => |v| v,
+        .u8, .smallUint, .smallIntPositive => |v| v,
+        .i64, .varIntSignedPositive, .varIntSignedNegative => |v| v,
+        .i32 => |v| v,
+        .i16 => |v| v,
+        .i8 => |v| v,
+        .smallIntNegative => |v| -@as(i128, v),
+        else => null,
+    };
+}
+
+/// The Zig type of a typed array element.
+pub fn TypedArrayElemType(comptime elem: TypedArrayElem) type {
+    return switch (elem) {
+        .u8 => u8,
+        .i8 => i8,
+        .u16 => u16,
+        .i16 => i16,
+        .u32 => u32,
+        .i32 => i32,
+        .u64 => u64,
+        .i64 => i64,
+        .f16 => f16,
+        .f32 => f32,
+        .f64 => f64,
+    };
+}
+
 pub fn typedArrayElemFromType(comptime T: type) ?TypedArrayElem {
     return switch (T) {
         u8 => .u8,

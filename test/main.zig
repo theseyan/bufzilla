@@ -155,7 +155,7 @@ test "writer/fixed: small tags are used" {
         try std.testing.expectEqual(@as(usize, 1), written.len);
 
         const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallIntPositive))), decoded.tag);
+        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallIntPositive))), decoded.tag);
         try std.testing.expectEqual(@as(u3, 7), decoded.data);
     }
 
@@ -170,7 +170,7 @@ test "writer/fixed: small tags are used" {
         try std.testing.expectEqual(@as(usize, 1), written.len);
 
         const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallIntNegative))), decoded.tag);
+        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallIntNegative))), decoded.tag);
         try std.testing.expectEqual(@as(u3, 7), decoded.data);
     }
 
@@ -185,7 +185,7 @@ test "writer/fixed: small tags are used" {
         try std.testing.expectEqual(@as(usize, 1 + 7), written.len);
 
         const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallBytes))), decoded.tag);
+        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallBytes))), decoded.tag);
         try std.testing.expectEqual(@as(u3, 7), decoded.data);
     }
 
@@ -202,7 +202,7 @@ test "writer/fixed: small tags are used" {
 
         // [ object_tag ][ key_tag ][ 'a' ][ value_tag ][ end_tag ]
         const key_decoded = Common.decodeTag(written[1]);
-        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.smallBytes))), key_decoded.tag);
+        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.smallBytes))), key_decoded.tag);
         try std.testing.expectEqual(@as(u3, 1), key_decoded.data);
         try std.testing.expectEqual(@as(u8, 'a'), written[2]);
     }
@@ -224,7 +224,7 @@ test "writer/reader: typedArray roundtrip and skipping" {
 
         // Verify header: tag + subtype + count(1 byte)
         const decoded = Common.decodeTag(written[0]);
-        try std.testing.expectEqual(@as(u5, @intCast(@intFromEnum(Value.typedArray))), decoded.tag);
+        try std.testing.expectEqual(@as(u5, @intCast(@backingInt(Value.typedArray))), decoded.tag);
         try std.testing.expectEqual(@as(u3, 0), decoded.data); // count fits in 1 byte
 
         var reader = Reader(.{}).init(written);
@@ -273,15 +273,15 @@ test "writer/reader: typedArray roundtrip and skipping" {
 }
 
 test "reader: typedArray invalid subtype" {
-    const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
+    const tag = Common.encodeTag(@backingInt(Value.typedArray), 0); // count varint is 1 byte
     const buf = &[_]u8{ tag, 0xFF }; // invalid subtype, missing count/payload is fine
     var reader = Reader(.{}).init(buf);
     try std.testing.expectError(error.InvalidEnumTag, reader.read());
 }
 
 test "reader: typedArray truncated payload errors" {
-    const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
-    const subtype: u8 = @intFromEnum(Common.TypedArrayElem.f32);
+    const tag = Common.encodeTag(@backingInt(Value.typedArray), 0); // count varint is 1 byte
+    const subtype: u8 = @backingInt(Common.TypedArrayElem.f32);
     const count: u8 = 2; // expects 8 payload bytes
     const buf = &[_]u8{ tag, subtype, count, 0, 0, 0, 0 }; // only 4 payload bytes present
     var reader = Reader(.{}).init(buf);
@@ -289,10 +289,10 @@ test "reader: typedArray truncated payload errors" {
 }
 
 test "reader: typedArray respects max_bytes_length" {
-    const tag = Common.encodeTag(@intFromEnum(Value.typedArray), 0); // count varint is 1 byte
-    const subtype: u8 = @intFromEnum(Common.TypedArrayElem.u32);
+    const tag = Common.encodeTag(@backingInt(Value.typedArray), 0); // count varint is 1 byte
+    const subtype: u8 = @backingInt(Common.TypedArrayElem.u32);
     const count: u8 = 3; // payload is 12 bytes
-    const payload = [_]u8{0} ** 12;
+    const payload: [12]u8 = @splat(0);
     var buf: [1 + 1 + 1 + 12]u8 = undefined;
     buf[0] = tag;
     buf[1] = subtype;
@@ -718,6 +718,357 @@ test "writer/applyUpdates: propagates reader unexpected eof" {
     try std.testing.expectError(bufzilla.ReadError.UnexpectedEof, out_writer.applyUpdates(truncated, updates[0..]));
 }
 
+test "writer/applyUpdates: default array extension limit" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.endContainer();
+    const encoded = aw.written();
+
+    // Extension at the default limit boundary fails before writing null padding
+    var huge: i64 = 1;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("arr[1048576]", &huge),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+
+    try std.testing.expectError(bufzilla.ReadError.ArrayTooLarge, out_writer.applyUpdates(encoded, updates[0..]));
+    // Only the streaming prefix (object tag + key + array tag) is emitted;
+    // no null padding for the rejected extension.
+    try std.testing.expectEqual(@as(usize, 6), out_aw.written().len);
+}
+
+test "writer/applyUpdates: explicit array extension limits" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.endContainer();
+    const encoded = aw.written();
+
+    var val: i64 = 7;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("arr[9]", &val),
+    };
+
+    // Within limit: resulting length 10 <= 10
+    {
+        var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+        defer out_aw.deinit();
+        var out_writer = Writer.init(&out_aw.writer);
+        try out_writer.applyUpdatesWithLimits(encoded, updates[0..], .{ .max_array_length = 10 });
+        var reader = Reader(.{}).init(out_aw.written());
+        try std.testing.expect((try reader.readPath("arr[9]")).? == .i64);
+        try std.testing.expect((try reader.readPath("arr[8]")).? == .null);
+    }
+
+    // At limit: resulting length 11 > 10
+    {
+        var val10: i64 = 7;
+        var updates10 = [_]Writer.Update{
+            Writer.Update.init("arr[10]", &val10),
+        };
+        var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+        defer out_aw.deinit();
+        var out_writer = Writer.init(&out_aw.writer);
+        try std.testing.expectError(bufzilla.ReadError.ArrayTooLarge, out_writer.applyUpdatesWithLimits(encoded, updates10[0..], .{ .max_array_length = 10 }));
+        // Only the streaming prefix (object tag + key + array tag) is emitted;
+        // no null padding for the rejected extension.
+        try std.testing.expectEqual(@as(usize, 6), out_aw.written().len);
+    }
+
+    // Unlimited
+    {
+        var val1000: i64 = 7;
+        var updates1000 = [_]Writer.Update{
+            Writer.Update.init("arr[1000]", &val1000),
+        };
+        var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+        defer out_aw.deinit();
+        var out_writer = Writer.init(&out_aw.writer);
+        try out_writer.applyUpdatesWithLimits(encoded, updates1000[0..], .{ .max_array_length = null });
+        var reader = Reader(.{}).init(out_aw.written());
+        try std.testing.expect((try reader.readPath("arr[1000]")).? == .i64);
+        try std.testing.expect((try reader.readPath("arr[999]")).? == .null);
+    }
+}
+
+test "writer/applyUpdates: existing array extension respects limit" {
+    var aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+
+    var writer = Writer.init(&aw.writer);
+    try writer.startObject();
+    try writer.writeAny("arr");
+    try writer.startArray();
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+    try writer.endContainer();
+    const encoded = aw.written();
+
+    var val: i64 = 2;
+    var updates = [_]Writer.Update{
+        Writer.Update.init("arr[1]", &val),
+    };
+
+    var out_aw = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out_aw.deinit();
+    var out_writer = Writer.init(&out_aw.writer);
+    try out_writer.applyUpdatesWithLimits(encoded, updates[0..], .{ .max_array_length = 2 });
+    var reader = Reader(.{}).init(out_aw.written());
+    try std.testing.expectEqual(@as(i64, 2), (try reader.readPath("arr[1]")).?.i64);
+}
+
+test "writer/applyUpdates: nested arrays and extension boundaries" {
+    var encoded_buf: [256]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.writeAny(.{
+        .arr = &[_]i64{1},
+        .nested = &[_]struct { arr: []const i64 }{.{ .arr = &.{1} }},
+    });
+
+    const Case = struct { path: []const u8, limit: usize, rejects: bool };
+    const cases = [_]Case{
+        .{ .path = "arr[1]", .limit = 1, .rejects = true },
+        .{ .path = "arr[1]", .limit = 2, .rejects = false },
+        // A zero limit forbids extension, but permits edits to existing arrays.
+        .{ .path = "arr[0]", .limit = 0, .rejects = false },
+        .{ .path = "missing[0]", .limit = 0, .rejects = true },
+        .{ .path = "missing[0]", .limit = 1, .rejects = false },
+        // Exercise both traversal of existing containers and creation of new ones.
+        .{ .path = "nested[0].arr[1]", .limit = 1, .rejects = true },
+        .{ .path = "nested[0].arr[1]", .limit = 2, .rejects = false },
+        .{ .path = "missing[0][1]", .limit = 1, .rejects = true },
+        .{ .path = "missing[0][1]", .limit = 2, .rejects = false },
+        .{ .path = "missing.child[1]", .limit = 1, .rejects = true },
+    };
+    const value: i64 = 7;
+    for (cases) |case| {
+        var updates = [_]Writer.Update{Writer.Update.init(case.path, &value)};
+        var output: [256]u8 = undefined;
+        var fixed = Io.Writer.fixed(&output);
+        var out_writer = Writer.init(&fixed);
+        const result = out_writer.applyUpdatesWithLimits(encoded_writer.buffered(), &updates, .{ .max_array_length = case.limit });
+        if (case.rejects) {
+            try std.testing.expectError(error.ArrayTooLarge, result);
+        } else {
+            try result;
+            var reader = Reader(.{}).init(fixed.buffered());
+            try std.testing.expectEqual(value, (try reader.readPath(case.path)).?.i64);
+        }
+    }
+}
+
+test "writer/applyUpdates: maximum usize index fails before padding" {
+    var encoded_buf: [2]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.startObject();
+    try writer.endContainer();
+
+    var path_buf: [64]u8 = undefined;
+    const update_path = try std.mem.print(&path_buf, "arr[{d}]", .{std.math.maxInt(usize)});
+    const value: i64 = 1;
+    var updates = [_]Writer.Update{Writer.Update.init(update_path, &value)};
+    // Enough room for a prefix, but not for padding: a late check would return WriteFailed.
+    var output: [16]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try std.testing.expectError(error.ArrayTooLarge, out_writer.applyUpdates(encoded_writer.buffered(), &updates));
+}
+
+test "writer/applyUpdates: last of several updates to the same path wins" {
+    var encoded_buf: [64]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.writeAny(.{ .a = @as(i64, 0), .b = @as(i64, 0) });
+
+    // Enough updates that sorting goes beyond insertion sort, where an unstable sort reorders equal paths.
+    var values: [64]i64 = undefined;
+    var updates: [64]Writer.Update = undefined;
+    for (&values, &updates, 0..) |*value, *update, i| {
+        value.* = @intCast(i);
+        update.* = .init(if (i % 2 == 0) "a" else "b", value);
+    }
+
+    var output: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try out_writer.applyUpdates(encoded_writer.buffered(), &updates);
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expectEqual(@as(i64, 62), (try reader.readPath("a")).?.i64);
+    try std.testing.expectEqual(@as(i64, 63), (try reader.readPath("b")).?.i64);
+}
+
+test "writer/applyUpdates: the last of several root replacements wins" {
+    var encoded_buf: [16]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.writeAny(.{ .a = @as(i64, 1) });
+
+    const first: i64 = 1;
+    const second: i64 = 2;
+    var updates = [_]Writer.Update{ .init("", &first), .init("", &second) };
+    var output: [16]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try out_writer.applyUpdates(encoded_writer.buffered(), &updates);
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expectEqual(@as(i64, 2), (try reader.read()).i64);
+}
+
+test "writer/applyUpdates: typed array element updates must fit the element type" {
+    var encoded_buf: [32]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.startObject();
+    try writer.writeAny("ta");
+    try writer.writeTypedArray(&[_]i8{ 1, 2 });
+    try writer.endContainer();
+    const encoded = encoded_writer.buffered();
+
+    const too_big: i64 = 200;
+    const fits: u64 = 100;
+    const wrong_type = "string";
+    const cases = .{ .{ &too_big, error.TypeMismatch }, .{ &wrong_type, error.TypeMismatch } };
+    inline for (cases) |case| {
+        var updates = [_]Writer.Update{.init("ta[0]", case[0])};
+        var output: [32]u8 = undefined;
+        var fixed = Io.Writer.fixed(&output);
+        var out_writer = Writer.init(&fixed);
+        try std.testing.expectError(case[1], out_writer.applyUpdates(encoded, &updates));
+    }
+
+    var updates = [_]Writer.Update{.init("ta[1]", &fits)};
+    var output: [32]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try out_writer.applyUpdates(encoded, &updates);
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expectEqual(@as(i8, 100), (try reader.readPath("ta[1]")).?.i8);
+}
+
+test "writer/applyUpdates: a root replacement cannot hide behind a quoted empty key" {
+    var encoded_buf: [16]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.writeAny(.{ .a = @as(i64, 1) });
+
+    const key_value: i64 = 5;
+    const root_value: i64 = 9;
+    var updates = [_]Writer.Update{ .init("['']", &key_value), .init("", &root_value) };
+    var output: [16]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try std.testing.expectError(error.ConflictingUpdates, out_writer.applyUpdates(encoded_writer.buffered(), &updates));
+}
+
+test "writer/applyUpdates: float element updates must not overflow the element type" {
+    var encoded_buf: [32]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.startObject();
+    try writer.writeAny("t");
+    try writer.writeTypedArray(&[_]f32{ 0, 0 });
+    try writer.endContainer();
+    const encoded = encoded_writer.buffered();
+
+    var output: [32]u8 = undefined;
+    const huge: f64 = 1e300;
+    var overflow = [_]Writer.Update{.init("t[0]", &huge)};
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try std.testing.expectError(error.TypeMismatch, out_writer.applyUpdates(encoded, &overflow));
+
+    // A value that only loses precision, and infinity itself, are accepted.
+    const rounded: f64 = 0.1;
+    const infinite: f64 = std.math.inf(f64);
+    var accepted = [_]Writer.Update{ .init("t[0]", &rounded), .init("t[1]", &infinite) };
+    fixed = Io.Writer.fixed(&output);
+    out_writer = Writer.init(&fixed);
+    try out_writer.applyUpdates(encoded, &accepted);
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expectEqual(@as(f32, 0.1), (try reader.readPath("t[0]")).?.f32);
+    try std.testing.expect(std.math.isInf((try reader.readPath("t[1]")).?.f32));
+}
+
+fn writeNothing(_: *Writer, _: *const anyopaque) Writer.Error!void {}
+
+test "writer/applyUpdates: an element update that writes no value is a type mismatch" {
+    var encoded_buf: [32]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.startObject();
+    try writer.writeAny("t");
+    try writer.writeTypedArray(&[_]u8{0});
+    try writer.endContainer();
+
+    const unused: u8 = 0;
+    var updates = [_]Writer.Update{.{ .path = "t[0]", .ctx = &unused, .writeFn = writeNothing }};
+    var output: [32]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try std.testing.expectError(error.TypeMismatch, out_writer.applyUpdates(encoded_writer.buffered(), &updates));
+}
+
+test "writer/applyUpdates: replacing an existing key and creating new containers" {
+    var encoded_buf: [64]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.writeAny(.{ .c = @as(i64, -50), .d = @as(i64, 93) });
+
+    // `d` is applied while scanning the object; the new `a` and `b` containers are emitted afterwards.
+    const value: i64 = 1;
+    var updates = [_]Writer.Update{ .init("d", &value), .init("b[1].a", &value), .init("a.c", &value) };
+    var output: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&output);
+    var out_writer = Writer.init(&fixed);
+    try out_writer.applyUpdates(encoded_writer.buffered(), &updates);
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expectEqual(@as(i64, 1), (try reader.readPath("d")).?.i64);
+    try std.testing.expectEqual(@as(i64, 1), (try reader.readPath("b[1].a")).?.i64);
+    try std.testing.expect((try reader.readPath("b[0]")).? == .null);
+    try std.testing.expectEqual(@as(i64, 1), (try reader.readPath("a.c")).?.i64);
+}
+
+test "writer/applyUpdates: many updates into one array take linear time" {
+    var encoded_buf: [2]u8 = undefined;
+    var encoded_writer = Io.Writer.fixed(&encoded_buf);
+    var writer = Writer.init(&encoded_writer);
+    try writer.startObject();
+    try writer.endContainer();
+
+    // Previously each padded index rescanned every update: 1000 updates x 64Ki indices.
+    const count = 1000;
+    const first_index = (1 << 16) - count;
+    var path_bufs: [count][16]u8 = undefined;
+    var updates: [count]Writer.Update = undefined;
+    const value: i64 = 7;
+    for (&path_bufs, &updates, 0..) |*path_buf, *update, i| {
+        update.* = .init(try std.mem.print(path_buf, "a[{d}]", .{first_index + i}), &value);
+    }
+
+    const output = try std.testing.allocator.alloc(u8, 1 << 17);
+    defer std.testing.allocator.free(output);
+    var fixed = Io.Writer.fixed(output);
+    var out_writer = Writer.init(&fixed);
+    try out_writer.applyUpdates(encoded_writer.buffered(), &updates);
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expect((try reader.readPath("a[0]")).? == .null);
+    try std.testing.expectEqual(value, (try reader.readPath("a[65535]")).?.i64);
+}
+
 // =============================================================================
 // Reader Tests
 // =============================================================================
@@ -907,7 +1258,7 @@ test "consistency: allocating and fixed produce identical output" {
 
 test "reader: containerEnd at depth 0" {
     // malformed: a containerEnd tag without any preceding container
-    const containerEndTag = Common.encodeTag(@intFromEnum(Value.containerEnd), 0);
+    const containerEndTag = Common.encodeTag(@backingInt(Value.containerEnd), 0);
     const malformed = &[_]u8{containerEndTag};
 
     var reader = Reader(.{}).init(malformed);
@@ -927,7 +1278,7 @@ test "reader: nested containerEnd underflow" {
     const written = fixed.buffered();
     var malformed: [33]u8 = undefined;
     @memcpy(malformed[0..written.len], written);
-    malformed[written.len] = Common.encodeTag(@intFromEnum(Value.containerEnd), 0);
+    malformed[written.len] = Common.encodeTag(@backingInt(Value.containerEnd), 0);
 
     var reader = Reader(.{}).init(malformed[0 .. written.len + 1]);
 
@@ -939,7 +1290,7 @@ test "reader: nested containerEnd underflow" {
 
 test "reader: malformed varIntBytes length" {
     // malformed input with varIntBytes tag and a huge length that would overflow if added to pos.
-    const varIntBytesTag = Common.encodeTag(@intFromEnum(Value.varIntBytes), 3);
+    const varIntBytesTag = Common.encodeTag(@backingInt(Value.varIntBytes), 3);
 
     // large length (0xFFFFFFFF = ~4GB) that can cause overflow
     var malformed: [5]u8 = undefined;
@@ -959,8 +1310,8 @@ test "reader: malformed varIntBytes length" {
 }
 
 test "reader: skipValue checks fixed-width payload bounds" {
-    const f64_tag = Common.encodeTag(@intFromEnum(Value.f64), 0);
-    const u32_tag = Common.encodeTag(@intFromEnum(Value.u32), 0);
+    const f64_tag = Common.encodeTag(@backingInt(Value.f64), 0);
+    const u32_tag = Common.encodeTag(@backingInt(Value.u32), 0);
 
     {
         const malformed = &[_]u8{f64_tag};
@@ -977,7 +1328,7 @@ test "reader: skipValue checks fixed-width payload bounds" {
 
 test "reader: malicious bytes length causes BytesTooLong" {
     // malformed input: bytes tag and a huge 8-byte length
-    const bytesTag = Common.encodeTag(@intFromEnum(Value.bytes), 0);
+    const bytesTag = Common.encodeTag(@backingInt(Value.bytes), 0);
 
     // 1 byte tag + 8 bytes for u64 length
     var malformed: [9]u8 = undefined;
@@ -1025,6 +1376,80 @@ test "inspect: invalid UTF-8 returns error" {
     var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
 
     try std.testing.expectError(error.InvalidUtf8, inspector.inspect());
+}
+
+fn inspectDeeplyNested(result: *(bufzilla.InspectError!void)) void {
+    // Maximum default depth (2048) of nested arrays.
+    var enc_buffer: [4096]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    for (0..2048) |_| writer.startArray() catch unreachable;
+    for (0..2048) |_| writer.endContainer() catch unreachable;
+
+    var out_buffer: [16384]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{ .indent_size = 0 });
+    result.* = inspector.inspect();
+}
+
+test "inspect: deep nesting does not overflow a small thread stack" {
+    if (builtin.single_threaded) return error.SkipZigTest;
+    // Inspect used to recurse once per nesting level and overflowed stacks like this one.
+    var result: bufzilla.InspectError!void = {};
+    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, inspectDeeplyNested, .{&result});
+    thread.join();
+    try result;
+}
+
+test "inspect: float precision that cannot be rendered falls back to full precision" {
+    var enc_buffer: [16]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    try writer.writeAny(@as(f64, 1.5));
+
+    var out_buffer: [64]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    for ([_]usize{ 1 << 20, std.math.maxInt(usize) }) |precision| {
+        out_fixed = Io.Writer.fixed(&out_buffer);
+        var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{ .float_precision = precision });
+        try inspector.inspect();
+        try std.testing.expectEqualStrings("1.5", out_fixed.buffered());
+    }
+}
+
+test "inspect: container used as an object key returns error" {
+    var enc_buffer: [16]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    try writer.startObject();
+    try writer.startArray();
+    try writer.writeAny(@as(i64, 1));
+    try writer.endContainer();
+    try writer.writeAny(@as(i64, 2));
+    try writer.endContainer();
+
+    var out_buffer: [64]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{});
+    try std.testing.expectError(error.InvalidEnumTag, inspector.inspect());
+}
+
+test "inspect: non-string object keys are printed as JSON strings" {
+    var enc_buffer: [32]u8 = undefined;
+    var enc_fixed = Io.Writer.fixed(&enc_buffer);
+    var writer = Writer.init(&enc_fixed);
+    try writer.startObject();
+    try writer.writeAny(@as(i64, -1));
+    try writer.writeAny(true);
+    try writer.writeAny(null);
+    try writer.writeAny(@as(f64, 0.5));
+    try writer.endContainer();
+
+    var out_buffer: [64]u8 = undefined;
+    var out_fixed = Io.Writer.fixed(&out_buffer);
+    var inspector = Inspect(.{}).init(enc_fixed.buffered(), &out_fixed, .{ .indent_size = 0, .float_precision = 1 });
+    try inspector.inspect();
+    try std.testing.expectEqualStrings("{\n\"-1\": true,\n\"null\": 0.5\n}", out_fixed.buffered());
 }
 
 test "inspect: valid UTF-8 with multibyte chars works" {
@@ -1261,8 +1686,8 @@ test "reader: max_bytes_length limit enforced for varIntBytes" {
     var writer = Writer.init(&enc_fixed);
 
     // Write a 100-byte string
-    const long_string = "x" ** 100;
-    try writer.writeAny(long_string);
+    const long_string: [100]u8 = @splat('x');
+    try writer.writeAny(&long_string);
 
     // Set max_bytes_length to 50
     var reader = Reader(.{ .max_bytes_length = 50 }).init(enc_fixed.buffered());
@@ -1276,7 +1701,7 @@ test "reader: max_bytes_length limit enforced for bytes" {
     var writer = Writer.init(&enc_fixed);
 
     // Write a 100-byte array using the fixed bytes type
-    const long_data = [_]u8{0x42} ** 100;
+    const long_data: [100]u8 = @splat(0x42);
     try writer.write(Value{ .bytes = &long_data }, .bytes);
 
     // Set max_bytes_length to 50
@@ -1291,14 +1716,14 @@ test "reader: max_bytes_length null allows large bytes" {
     var writer = Writer.init(&enc_fixed);
 
     // Write a 1000-byte string
-    const long_string = "y" ** 1000;
-    try writer.writeAny(long_string);
+    const long_string: [1000]u8 = @splat('y');
+    try writer.writeAny(&long_string);
 
     // Set max_bytes_length to null
     var reader = Reader(.{ .max_bytes_length = null }).init(enc_fixed.buffered());
 
     const val = try reader.read();
-    try std.testing.expectEqualStrings(long_string, val.bytes);
+    try std.testing.expectEqualStrings(&long_string, val.bytes);
 }
 
 test "reader: max_array_length limit enforced" {
@@ -1341,7 +1766,7 @@ test "reader: max_object_size limit enforced" {
     try writer.startObject();
     for (0..100) |i| {
         var key_buf: [16]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "key{d}", .{i}) catch unreachable;
+        const key = std.mem.print(&key_buf, "key{d}", .{i}) catch unreachable;
         try writer.writeAny(key);
         try writer.writeAny(@as(i64, @intCast(i)));
     }
@@ -1435,7 +1860,7 @@ test "reader: combined limits enforced" {
     // Create nested structure with large string
     try writer.startObject();
     try writer.writeAny("data");
-    try writer.writeAny("z" ** 200);
+    try writer.writeAny(&@as([200]u8, @splat('z')));
     try writer.endContainer();
 
     // Set strict limits on everything
@@ -2119,7 +2544,7 @@ test "readPath: propagates max_bytes_length error" {
     // Create structure with a long string that we need to skip
     try writer.startObject();
     try writer.writeAny("long_key");
-    try writer.writeAny("x" ** 100); // 100 byte string
+    try writer.writeAny(&@as([100]u8, @splat('x'))); // 100 byte string
     try writer.writeAny("target");
     try writer.writeAny(@as(i64, 42));
     try writer.endContainer();
@@ -2139,7 +2564,7 @@ test "readPaths: propagates max_bytes_length error" {
     // Create structure with a long string that we need to skip
     try writer.startObject();
     try writer.writeAny("long_key");
-    try writer.writeAny("x" ** 100); // 100 byte string
+    try writer.writeAny(&@as([100]u8, @splat('x'))); // 100 byte string
     try writer.writeAny("target");
     try writer.writeAny(@as(i64, 42));
     try writer.endContainer();
@@ -2151,6 +2576,162 @@ test "readPaths: propagates max_bytes_length error" {
     };
 
     try std.testing.expectError(error.BytesTooLong, reader.readPaths(queries[0..]));
+}
+
+test "readPaths: error leaves the reader and query order unchanged" {
+    var buffer: [512]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.writeAny(.{ .a = @as(i64, 1), .b = "a string long enough to truncate" });
+    const truncated = fixed.buffered()[0 .. fixed.buffered().len - 4];
+
+    var reader = Reader(.{}).init(truncated);
+    _ = try reader.read(); // enter the root object
+    const pos = reader.pos;
+
+    var queries = [_]bufzilla.PathQuery{ .{ .path = "b" }, .{ .path = "a" } };
+    try std.testing.expectError(error.UnexpectedEof, reader.readPaths(&queries));
+    try std.testing.expectEqual(pos, reader.pos);
+    try std.testing.expectEqualStrings("b", queries[0].path);
+    try std.testing.expectEqualStrings("a", queries[1].path);
+
+    // The reader is still usable from where it was.
+    const kv = (try reader.iterateObject(.{ .object = 1 })).?;
+    try std.testing.expectEqualStrings("a", kv.key.bytes);
+}
+
+test "readPaths: a malformed query does not disturb the others" {
+    var buffer: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.writeAny(.{ .a = .{ .x = @as(i64, 3), .y = @as(i64, 4) }, .b = .{ .x = @as(i64, 5), .y = @as(i64, 6) } });
+
+    // Sorting malformed paths among valid ones used to separate queries that share a key, so a
+    // query could be resolved inside another key's value.
+    var queries = [_]bufzilla.PathQuery{ .{ .path = "a.x" }, .{ .path = "['b'].x" }, .{ .path = "[c" }, .{ .path = "a.y" } };
+    var reader = Reader(.{}).init(fixed.buffered());
+    try reader.readPaths(&queries);
+    try std.testing.expectEqual(@as(i64, 3), queries[0].value.?.i64);
+    try std.testing.expectEqual(@as(i64, 5), queries[1].value.?.i64);
+    try std.testing.expectEqual(@as(?Value, null), queries[2].value);
+    try std.testing.expectEqual(@as(i64, 4), queries[3].value.?.i64);
+}
+
+test "readPaths: agrees with readPath on duplicate keys and typed array roots" {
+    var buffer: [64]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    // {"a": {"x": 1}, "a": {"y": 2}}: like readPath, only the first "a" is searched.
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.writeAny(.{ .x = @as(i64, 1) });
+    try writer.writeAny("a");
+    try writer.writeAny(.{ .y = @as(i64, 2) });
+    try writer.endContainer();
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    var queries = [_]bufzilla.PathQuery{ .{ .path = "a.y" }, .{ .path = "a.x" } };
+    try reader.readPaths(&queries);
+    try std.testing.expectEqual(try reader.readPath("a.y"), queries[0].value);
+    try std.testing.expectEqual(@as(?Value, null), queries[0].value);
+    try std.testing.expectEqual(@as(i64, 1), queries[1].value.?.i64);
+
+    var ta_buffer: [16]u8 = undefined;
+    var ta_fixed = Io.Writer.fixed(&ta_buffer);
+    var ta_writer = Writer.init(&ta_fixed);
+    try ta_writer.writeTypedArray(&[_]u16{ 10, 20, 30 });
+    var ta_reader = Reader(.{}).init(ta_fixed.buffered());
+    var ta_queries = [_]bufzilla.PathQuery{ .{ .path = "[1]" }, .{ .path = "[2]" }, .{ .path = "[3]" } };
+    try ta_reader.readPaths(&ta_queries);
+    try std.testing.expectEqual(@as(u16, 20), ta_queries[0].value.?.u16);
+    try std.testing.expectEqual(@as(u16, 30), ta_queries[1].value.?.u16);
+    try std.testing.expectEqual(@as(?Value, null), ta_queries[2].value);
+}
+
+test "readPaths: many queries over a large object take linear time" {
+    // Previously every entry rescanned every query: 2000 queries x 20000 entries.
+    const entries = 20_000;
+    const query_count = 2000;
+    const encoded_buf = try std.testing.allocator.alloc(u8, entries * 16);
+    defer std.testing.allocator.free(encoded_buf);
+    var fixed = Io.Writer.fixed(encoded_buf);
+    var writer = Writer.init(&fixed);
+    try writer.startObject();
+    var key_buf: [16]u8 = undefined;
+    for (0..entries) |i| {
+        try writer.writeAny(try std.mem.print(&key_buf, "k{d}", .{i}));
+        try writer.writeAny(@as(i64, @intCast(i)));
+    }
+    try writer.endContainer();
+
+    var path_bufs: [query_count][16]u8 = undefined;
+    var queries: [query_count]bufzilla.PathQuery = undefined;
+    for (&queries, &path_bufs, 0..) |*query, *path_buf, i| {
+        // Every tenth key, read back to front, plus one that is missing.
+        const key = if (i == 0) "missing" else try std.mem.print(path_buf, "k{d}", .{entries - 10 * i});
+        query.* = .{ .path = key };
+    }
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    try reader.readPaths(&queries);
+    try std.testing.expectEqual(@as(?Value, null), queries[0].value);
+    for (queries[1..], 1..) |query, i| {
+        try std.testing.expectEqual(@as(i64, @intCast(entries - 10 * i)), query.value.?.i64);
+    }
+}
+
+test "readPath and readPaths: object key without a value returns UnexpectedContainerEnd" {
+    // {"o": {"a" <end>}, "b": 2}
+    var buffer: [16]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.startObject();
+    try writer.writeAny("o");
+    try writer.startObject();
+    try writer.writeAny("a");
+    try writer.endContainer();
+    try writer.writeAny("b");
+    try writer.writeAny(@as(i64, 2));
+    try writer.endContainer();
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    try std.testing.expectError(error.UnexpectedContainerEnd, reader.readPath("o.a"));
+    var queries = [_]bufzilla.PathQuery{ .{ .path = "o.a" }, .{ .path = "o.b" } };
+    try std.testing.expectError(error.UnexpectedContainerEnd, reader.readPaths(&queries));
+}
+
+test "readPaths: the empty path is the root, not a quoted empty key" {
+    var buffer: [16]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.startObject();
+    try writer.writeAny("");
+    try writer.writeAny(@as(i64, 7));
+    try writer.endContainer();
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    var queries = [_]bufzilla.PathQuery{ .{ .path = "['']" }, .{ .path = "" } };
+    try reader.readPaths(&queries);
+    try std.testing.expectEqual(@as(i64, 7), queries[0].value.?.i64);
+    try std.testing.expect(queries[1].value.? == .object);
+}
+
+test "readPaths: no queries reads nothing" {
+    var reader = Reader(.{}).init(&.{});
+    try reader.readPaths(&.{});
+}
+
+test "reader: object entry without a value returns UnexpectedContainerEnd" {
+    var buffer: [8]u8 = undefined;
+    var fixed = Io.Writer.fixed(&buffer);
+    var writer = Writer.init(&fixed);
+    try writer.startObject();
+    try writer.writeAny("k");
+    try writer.endContainer();
+
+    var reader = Reader(.{}).init(fixed.buffered());
+    const obj = try reader.read();
+    try std.testing.expectError(error.UnexpectedContainerEnd, reader.iterateObject(obj));
 }
 
 test "readPath: propagates max_array_length error" {
@@ -2202,7 +2783,7 @@ test "readPath: propagates max_object_size error" {
     try writer.startObject();
     for (0..20) |i| {
         var key_buf: [8]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "key{d}", .{i}) catch unreachable;
+        const key = std.mem.print(&key_buf, "key{d}", .{i}) catch unreachable;
         try writer.writeAny(key);
         try writer.writeAny(@as(i64, @intCast(i)));
     }
@@ -2224,7 +2805,7 @@ test "readPaths: propagates max_object_size error" {
     try writer.startObject();
     for (0..20) |i| {
         var key_buf: [8]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "key{d}", .{i}) catch unreachable;
+        const key = std.mem.print(&key_buf, "key{d}", .{i}) catch unreachable;
         try writer.writeAny(key);
         try writer.writeAny(@as(i64, @intCast(i)));
     }

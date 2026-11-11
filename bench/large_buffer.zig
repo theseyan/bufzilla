@@ -3,6 +3,10 @@ const std = @import("std");
 const bufzilla = @import("bufzilla");
 const Io = std.Io;
 
+// Separator lines for benchmark output.
+const heavy_rule: [80]u8 = @splat('=');
+const light_rule: [80]u8 = @splat('-');
+
 const Writer = bufzilla.Writer;
 const Reader = bufzilla.Reader;
 
@@ -13,14 +17,14 @@ var bench_io: Io = undefined;
 pub fn main() !void {
     bench_io = std.Io.Threaded.global_single_threaded.io();
 
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(&heavy_rule ++ "\n", .{});
     std.debug.print("Large Buffer readPath Benchmark\n", .{});
-    std.debug.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print(&heavy_rule ++ "\n\n", .{});
 
     // Generate large buffer
     std.debug.print("Generating large encoded buffer...\n", .{});
@@ -99,7 +103,7 @@ pub fn main() !void {
 
     // Benchmark different readPath scenarios
     std.debug.print("Benchmarks:\n", .{});
-    std.debug.print("-" ** 80 ++ "\n", .{});
+    std.debug.print(&light_rule ++ "\n", .{});
 
     const iterations = 1000;
 
@@ -133,7 +137,7 @@ pub fn main() !void {
     {
         const middle_idx = item_count / 2;
         var path_buf: [64]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "data.items[{d}].id", .{middle_idx}) catch unreachable;
+        const path = std.mem.print(&path_buf, "data.items[{d}].id", .{middle_idx}) catch unreachable;
 
         const t_start = Io.Clock.awake.now(bench_io);
         for (0..iterations) |_| {
@@ -150,7 +154,7 @@ pub fn main() !void {
     {
         const last_idx = item_count - 1;
         var path_buf: [64]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "data.items[{d}].id", .{last_idx}) catch unreachable;
+        const path = std.mem.print(&path_buf, "data.items[{d}].id", .{last_idx}) catch unreachable;
 
         const t_start = Io.Clock.awake.now(bench_io);
         for (0..iterations) |_| {
@@ -249,7 +253,7 @@ pub fn main() !void {
     }
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(&heavy_rule ++ "\n", .{});
 
     // Calculate throughput
     {
@@ -266,5 +270,5 @@ pub fn main() !void {
         std.debug.print("Throughput scanning to end: {d:.2} MiB/s\n", .{throughput_mib});
     }
 
-    std.debug.print("=" ** 80 ++ "\n", .{});
+    std.debug.print(&heavy_rule ++ "\n", .{});
 }

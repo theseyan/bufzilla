@@ -32,9 +32,14 @@ const PeekResult = struct {
 /// A single path query for readPaths.
 pub const PathQuery = struct {
     path: []const u8,
+    /// Set by `readPaths`: the value at `path`, or null if there is none.
     value: ?common.Value = null,
+    /// Internal to `readPaths`.
     resolved: bool = false,
+    /// Internal to `readPaths`: the query's position in the caller's slice.
     orig_index: usize = 0,
+    /// Internal to `readPaths`: where the path segment being processed starts in `path`.
+    offset: usize = 0,
 };
 
 /// Error type for read operations.
@@ -67,7 +72,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
         depth: u32 = 0,
 
         // Per-depth iteration counters.
-        iteration_counts: [counter_stack_size]usize = [_]usize{0} ** counter_stack_size,
+        iteration_counts: [counter_stack_size]usize = @splat(0),
 
         /// Initializes the reader.
         pub fn init(bytes: []const u8) Self {
@@ -91,7 +96,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             switch (@typeInfo(T)) {
                 .int => return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little),
                 .float => {
-                    const IntType = std.meta.Int(.unsigned, @bitSizeOf(T));
+                    const IntType = @Int(.unsigned, @bitSizeOf(T));
                     return @bitCast(std.mem.readInt(IntType, bytes[0..@sizeOf(T)], .little));
                 },
                 else => @compileError("readBytes: unsupported type"),
@@ -451,6 +456,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             if (key == .containerEnd) return null;
 
             const value = try self.read();
+            if (value == .containerEnd) return error.UnexpectedContainerEnd;
 
             // Check limit using per-depth counter
             if (limits.max_object_size) |max| {
@@ -484,10 +490,20 @@ pub fn Reader(comptime limits: ReadLimits) type {
             return lhs.orig_index < rhs.orig_index;
         }
 
+        /// Valid paths grouped by segments, so that at every level the queries addressing one key or
+        /// index are contiguous, followed by malformed paths (already resolved).
+        fn lessThanBySegments(_: void, lhs: PathQuery, rhs: PathQuery) bool {
+            if (lhs.resolved or rhs.resolved) return !lhs.resolved and rhs.resolved;
+            return path.lessThanPathSegments(lhs.path, rhs.path);
+        }
+
         /// Reads multiple paths from the buffer in a single pass.
-        /// Each query's `value` is populated with the found Value or null.
-        /// Malformed paths yield null for that query.
+        /// Each query's `value` is set to what `readPath` would return for its path: the found Value,
+        /// or null if the path does not exist or is malformed.
+        /// Like `readPath`, this does not move the reader, even on error.
+        /// On error, queries keep their order but their values are unspecified.
         pub fn readPaths(self: *Self, queries: []PathQuery) Error!void {
+            if (queries.len == 0) return;
             if (queries.len == 1) {
                 queries[0].value = try self.readPath(queries[0].path);
                 queries[0].resolved = true;
@@ -498,412 +514,216 @@ pub fn Reader(comptime limits: ReadLimits) type {
             const saved_pos = self.pos;
             const saved_depth = self.depth;
             const saved_counts = self.iteration_counts;
+            defer {
+                self.pos = saved_pos;
+                self.depth = saved_depth;
+                self.iteration_counts = saved_counts;
+            }
+            // Queries are sorted while being resolved; put them back in caller order.
+            defer std.mem.sort(PathQuery, queries, {}, lessThanByIndex);
 
             self.pos = 0;
             self.depth = 0;
-            self.iteration_counts = [_]usize{0} ** counter_stack_size;
+            self.iteration_counts = @splat(0);
 
-            try self.readPathsInternal(queries);
-
-            self.pos = saved_pos;
-            self.depth = saved_depth;
-            self.iteration_counts = saved_counts;
-        }
-
-        fn readPathsInternal(self: *Self, queries: []PathQuery) Error!void {
-            if (queries.len == 0) return;
-
-            var remaining: usize = queries.len;
+            var remaining: usize = 0;
             for (queries, 0..) |*q, i| {
-                q.value = null;
-                q.resolved = false;
-                q.orig_index = i;
-                if (!path.validate(q.path)) {
-                    q.resolved = true;
-                    remaining -= 1;
-                }
+                q.* = .{ .path = q.path, .orig_index = i };
+                if (path.validate(q.path)) remaining += 1 else q.resolved = true;
             }
 
-            if (queries.len > 1) {
-                const LessSeg = struct {
-                    fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                        return path.lessThanPathSegments(a.path, b.path);
-                    }
-                };
-                std.sort.pdq(PathQuery, queries, {}, LessSeg.lt);
-            }
+            std.sort.pdq(PathQuery, queries, {}, lessThanBySegments);
+            const valid = queries[0..remaining];
 
-            if (remaining == 0) {
-                if (queries.len > 1) {
-                    const LessIdx = struct {
-                        fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                            return lessThanByIndex({}, a, b);
-                        }
-                    };
-                    std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
-                }
-                return;
-            }
+            // Read even if every path is malformed: `readPath` reads the root first, too.
+            const root = try self.read();
+            // Empty paths address the root itself; they sort first.
+            var first: usize = 0;
+            while (first < valid.len and valid[first].path.len == 0) : (first += 1) resolveQuery(&valid[first], root, &remaining);
+            try self.resolveIn(root, valid[first..], &remaining, 0);
+        }
 
-            const root_peek = try self.peekTag();
+        // Path queries are resolved in one pass over the data. At each container, the queries whose
+        // current segment addresses its contents are a sorted, contiguous slice: object entries find
+        // theirs by binary search, array elements by a cursor. Each query's `offset` marks its current
+        // segment (see `path.descend`). A container's scan stops once its own queries are resolved, so
+        // it reads exactly as far as `readPath` would for the furthest of them.
 
-            if (root_peek.tag != .object and root_peek.tag != .array) {
-                if (remaining > 0) {
-                    var has_empty = false;
-                    for (queries) |q| {
-                        if (!q.resolved and q.path.len == 0) {
-                            has_empty = true;
-                            break;
-                        }
-                    }
+        fn resolveQuery(query: *PathQuery, value: ?common.Value, remaining: *usize) void {
+            query.value = value;
+            query.resolved = true;
+            remaining.* -= 1;
+        }
 
-                    if (has_empty) {
-                        const root_val = try self.read();
-                        for (queries) |*q| {
-                            if (!q.resolved and q.path.len == 0) {
-                                q.value = root_val;
-                                q.resolved = true;
-                                remaining -= 1;
-                            }
-                        }
-                    }
-                }
-
-                if (queries.len > 1) {
-                    const LessIdx = struct {
-                        fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                            return lessThanByIndex({}, a, b);
-                        }
-                    };
-                    std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
-                }
-                return;
-            }
-
-            const root_val = try self.read();
-            for (queries) |*q| {
-                if (!q.resolved and q.path.len == 0) {
-                    q.value = root_val;
-                    q.resolved = true;
-                    remaining -= 1;
-                }
-            }
-
-            if (remaining > 0) {
-                if (root_val == .object) {
-                    try self.readPathsObject(queries, 0, &remaining);
-                } else {
-                    try self.readPathsArray(queries, 0, &remaining);
-                }
-            }
-
-            if (queries.len > 1) {
-                const LessIdx = struct {
-                    fn lt(_: void, a: PathQuery, b: PathQuery) bool {
-                        return lessThanByIndex({}, a, b);
-                    }
-                };
-                std.sort.pdq(PathQuery, queries, {}, LessIdx.lt);
+        /// Resolves `queries`, whose current segments (at path depth `depth`) address the contents
+        /// of `value`, which was just read. Unless no queries remain at all, this leaves the reader
+        /// after `value`.
+        fn resolveIn(self: *Self, value: common.Value, queries: []PathQuery, remaining: *usize, depth: usize) Error!void {
+            switch (value) {
+                .object => try self.resolveInObject(queries, remaining, depth),
+                .array => try self.resolveInArray(queries, remaining, depth),
+                .typedArray => |ta| for (queries) |*q| resolveQuery(q, typedArrayElementAt(ta, q), remaining),
+                else => for (queries) |*q| resolveQuery(q, null, remaining),
             }
         }
 
-        fn readPathsObject(self: *Self, queries: []PathQuery, path_depth: usize, remaining: *usize) Error!void {
-            var kv_count: usize = 0;
+        fn typedArrayElementAt(ta: common.TypedArray, query: *const PathQuery) ?common.Value {
+            const seg = path.currentSegment(query) orelse return null;
+            if (!seg.is_index or seg.index >= ta.count or seg.rest.len != 0) return null;
+            return common.typedArrayElementToValue(ta, seg.index) catch null;
+        }
 
+        fn resolveInObject(self: *Self, queries: []PathQuery, remaining: *usize, depth: usize) Error!void {
+            // Keys sort before indices, and an index cannot match in an object.
+            var keyed: usize = 0;
+            while (keyed < queries.len) : (keyed += 1) {
+                const seg = path.currentSegment(&queries[keyed]) orelse break;
+                if (seg.is_index) break;
+            }
+            for (queries[keyed..]) |*q| resolveQuery(q, null, remaining);
+
+            var pending = keyed;
+            var entries: usize = 0;
             while (true) {
-                if (remaining.* == 0) {
-                    return;
-                }
+                if (remaining.* == 0) return;
+                if (pending == 0) return self.skipRestOfContainer();
 
                 const peek = try self.peekTag();
-                if (peek.tag == .containerEnd) {
-                    _ = try self.read();
-                    return;
-                }
-
+                if (peek.tag == .containerEnd) break;
                 if (limits.max_object_size) |max| {
-                    if (kv_count >= max) return error.ObjectTooLarge;
+                    if (entries >= max) return error.ObjectTooLarge;
                 }
+                entries += 1;
 
-                // Keys must be bytes; if not, skip key+value and continue.
                 if (peek.tag != .varIntBytes and peek.tag != .bytes and peek.tag != .smallBytes) {
+                    // Only byte string keys can match: skip the key and its value.
                     try self.skipValue();
-                    try self.skipValue();
-                    kv_count += 1;
-                    continue;
-                }
-
-                const key_slice = try self.readBytesSlice();
-                defer kv_count += 1;
-
-                var match_start: ?usize = null;
-                var match_end: usize = 0;
-                var any_leaf = false;
-                var any_child = false;
-
-                for (queries, 0..) |*q, i| {
-                    if (q.resolved) continue;
-                    const seg = path.segmentAtDepth(q.path, path_depth) orelse {
-                        q.resolved = true;
-                        remaining.* -= 1;
-                        continue;
-                    };
-                    if (seg.is_index) {
-                        q.resolved = true;
-                        remaining.* -= 1;
-                        continue;
-                    }
-                    if (std.mem.eql(u8, seg.key, key_slice)) {
-                        if (match_start == null) match_start = i;
-                        match_end = i + 1;
-                        if (seg.rest.len == 0) {
-                            any_leaf = true;
-                        } else {
-                            any_child = true;
-                        }
-                    }
-                }
-
-                if (match_start == null) {
                     try self.skipValue();
                     continue;
                 }
+                const key = try self.readBytesSlice();
+                const run = pendingKeyRun(queries[0..keyed], key) orelse {
+                    try self.skipValue();
+                    continue;
+                };
+                pending -= run.len;
+                try self.resolveEntry(run, remaining, depth);
+            }
 
-                const matching = queries[match_start.?..match_end];
-
-                if (any_leaf) {
-                    const val = try self.read();
-                    for (matching) |*q| {
-                        if (q.resolved) continue;
-                        const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
-                        if (!seg.is_index and std.mem.eql(u8, seg.key, key_slice) and seg.rest.len == 0) {
-                            q.value = val;
-                            q.resolved = true;
-                            remaining.* -= 1;
-                        }
-                    }
-                    if (remaining.* == 0) return;
-
-                    if (val == .object or val == .array) {
-                        if (any_child) {
-                            if (val == .object) {
-                                try self.readPathsObject(matching, path_depth + 1, remaining);
-                            } else {
-                                try self.readPathsArray(matching, path_depth + 1, remaining);
-                            }
-                        } else {
-                            const target = if (val == .object) val.object - 1 else val.array - 1;
-                            try self.discardUntilDepth(target);
-                        }
-                    } else if (val == .typedArray) {
-                        if (any_child) {
-                            self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
-                        }
-                    } else if (any_child) {
-                        for (matching) |*q| {
-                            if (q.resolved) continue;
-                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
-                            if (!seg.is_index and std.mem.eql(u8, seg.key, key_slice) and seg.rest.len > 0) {
-                                q.resolved = true;
-                                remaining.* -= 1;
-                            }
-                        }
-                        if (remaining.* == 0) return;
-                    }
-                } else {
-                    const val_peek = try self.peekTag();
-                    if (val_peek.tag == .typedArray) {
-                        const val = try self.read();
-                        std.debug.assert(val == .typedArray);
-                        self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
-                    } else if (val_peek.tag != .object and val_peek.tag != .array) {
-                        for (matching) |*q| {
-                            if (q.resolved) continue;
-                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
-                            if (!seg.is_index and std.mem.eql(u8, seg.key, key_slice)) {
-                                q.resolved = true;
-                                remaining.* -= 1;
-                            }
-                        }
-                        if (remaining.* == 0) return;
-                        try self.skipValue();
-                    } else {
-                        const val = try self.read();
-                        if (val == .object) {
-                            try self.readPathsObject(matching, path_depth + 1, remaining);
-                        } else {
-                            try self.readPathsArray(matching, path_depth + 1, remaining);
-                        }
-                    }
-                }
+            _ = try self.read();
+            for (queries[0..keyed]) |*q| {
+                if (!q.resolved) resolveQuery(q, null, remaining);
             }
         }
 
-        fn readPathsArray(self: *Self, queries: []PathQuery, path_depth: usize, remaining: *usize) Error!void {
-            var idx: usize = 0;
+        /// The unresolved queries whose current segment is the key `key`, found by binary search.
+        /// Null if there are none: a run is resolved as a whole by the first entry with its key, as
+        /// in `readPath`.
+        fn pendingKeyRun(queries: []PathQuery, key: []const u8) ?[]PathQuery {
+            var lo: usize = 0;
+            var hi: usize = queries.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (std.mem.order(u8, segmentKey(&queries[mid]), key) == .lt) lo = mid + 1 else hi = mid;
+            }
+            if (lo == queries.len or queries[lo].resolved) return null;
+            var end = lo;
+            while (end < queries.len and std.mem.eql(u8, segmentKey(&queries[end]), key)) end += 1;
+            return if (end == lo) null else queries[lo..end];
+        }
 
+        fn segmentKey(query: *const PathQuery) []const u8 {
+            return if (path.currentSegment(query)) |seg| seg.key else "";
+        }
+
+        fn resolveInArray(self: *Self, queries: []PathQuery, remaining: *usize, depth: usize) Error!void {
+            // Keys sort before indices, and a key cannot match in an array.
+            var cursor: usize = 0;
+            while (cursor < queries.len) : (cursor += 1) {
+                const seg = path.currentSegment(&queries[cursor]) orelse break;
+                if (seg.is_index) break;
+            }
+            for (queries[0..cursor]) |*q| resolveQuery(q, null, remaining);
+
+            // Queries are sorted by index; the cursor's index is parsed once per query.
+            var cursor_index = indexAt(queries, cursor);
+            var idx: usize = 0;
             while (true) {
-                if (remaining.* == 0) {
-                    return;
-                }
+                if (remaining.* == 0) return;
+                const target = cursor_index orelse return self.skipRestOfContainer();
 
                 const peek = try self.peekTag();
-                if (peek.tag == .containerEnd) {
-                    _ = try self.read();
-                    return;
-                }
-
+                if (peek.tag == .containerEnd) break;
                 if (limits.max_array_length) |max| {
                     if (idx >= max) return error.ArrayTooLarge;
                 }
 
-                var match_start: ?usize = null;
-                var match_end: usize = 0;
-                var any_leaf = false;
-                var any_child = false;
-
-                for (queries, 0..) |*q, i| {
-                    if (q.resolved) continue;
-                    const seg = path.segmentAtDepth(q.path, path_depth) orelse {
-                        q.resolved = true;
-                        remaining.* -= 1;
-                        continue;
-                    };
-                    if (!seg.is_index) {
-                        q.resolved = true;
-                        remaining.* -= 1;
-                        continue;
+                if (idx == target) {
+                    const start = cursor;
+                    while (cursor_index != null and cursor_index.? == idx) {
+                        cursor += 1;
+                        cursor_index = indexAt(queries, cursor);
                     }
-                    if (seg.index == idx) {
-                        if (match_start == null) match_start = i;
-                        match_end = i + 1;
-                        if (seg.rest.len == 0) {
-                            any_leaf = true;
-                        } else {
-                            any_child = true;
-                        }
-                    }
-                }
-
-                if (match_start == null) {
-                    try self.skipValue();
-                    idx += 1;
-                    continue;
-                }
-
-                const matching = queries[match_start.?..match_end];
-
-                if (any_leaf) {
-                    const val = try self.read();
-                    for (matching) |*q| {
-                        if (q.resolved) continue;
-                        const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
-                        if (seg.is_index and seg.index == idx and seg.rest.len == 0) {
-                            q.value = val;
-                            q.resolved = true;
-                            remaining.* -= 1;
-                        }
-                    }
-                    if (remaining.* == 0) return;
-
-                    if (val == .object or val == .array) {
-                        if (any_child) {
-                            if (val == .object) {
-                                try self.readPathsObject(matching, path_depth + 1, remaining);
-                            } else {
-                                try self.readPathsArray(matching, path_depth + 1, remaining);
-                            }
-                        } else {
-                            const target = if (val == .object) val.object - 1 else val.array - 1;
-                            try self.discardUntilDepth(target);
-                        }
-                    } else if (val == .typedArray) {
-                        if (any_child) {
-                            self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
-                        }
-                    } else if (any_child) {
-                        for (matching) |*q| {
-                            if (q.resolved) continue;
-                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
-                            if (seg.is_index and seg.index == idx and seg.rest.len > 0) {
-                                q.resolved = true;
-                                remaining.* -= 1;
-                            }
-                        }
-                        if (remaining.* == 0) return;
-                    }
+                    try self.resolveEntry(queries[start..cursor], remaining, depth);
                 } else {
-                    const val_peek = try self.peekTag();
-                    if (val_peek.tag == .typedArray) {
-                        const val = try self.read();
-                        std.debug.assert(val == .typedArray);
-                        self.resolveTypedArrayIndexQueries(val.typedArray, matching, path_depth + 1, remaining);
-                    } else if (val_peek.tag != .object and val_peek.tag != .array) {
-                        for (matching) |*q| {
-                            if (q.resolved) continue;
-                            const seg = path.segmentAtDepth(q.path, path_depth) orelse continue;
-                            if (seg.is_index and seg.index == idx) {
-                                q.resolved = true;
-                                remaining.* -= 1;
-                            }
-                        }
-                        if (remaining.* == 0) return;
-                        try self.skipValue();
-                    } else {
-                        const val = try self.read();
-                        if (val == .object) {
-                            try self.readPathsObject(matching, path_depth + 1, remaining);
-                        } else {
-                            try self.readPathsArray(matching, path_depth + 1, remaining);
-                        }
-                    }
+                    try self.skipValue();
                 }
-
                 idx += 1;
             }
+
+            _ = try self.read();
+            for (queries[cursor..]) |*q| resolveQuery(q, null, remaining);
         }
 
-        fn resolveTypedArrayIndexQueries(self: *Self, ta: common.TypedArray, queries: []PathQuery, path_depth: usize, remaining: *usize) void {
-            _ = self;
-            for (queries) |*q| {
-                if (q.resolved) continue;
-                const seg = path.segmentAtDepth(q.path, path_depth) orelse {
-                    q.resolved = true;
-                    remaining.* -= 1;
-                    continue;
-                };
-                if (!seg.is_index) {
-                    q.resolved = true;
-                    remaining.* -= 1;
-                    continue;
-                }
-                if (seg.index >= ta.count) {
-                    q.resolved = true;
-                    remaining.* -= 1;
-                    continue;
-                }
-                if (seg.rest.len != 0) {
-                    q.resolved = true;
-                    remaining.* -= 1;
-                    continue;
-                }
+        fn indexAt(queries: []PathQuery, i: usize) ?usize {
+            if (i == queries.len) return null;
+            return (path.currentSegment(&queries[i]) orelse return null).index;
+        }
 
-                q.value = common.typedArrayElementToValue(ta, seg.index) catch unreachable;
-                q.resolved = true;
-                remaining.* -= 1;
+        /// Reads the value of one container entry and resolves the queries addressing it. Queries
+        /// ending at this segment sort first and get the value itself; the rest look inside it.
+        fn resolveEntry(self: *Self, run: []PathQuery, remaining: *usize, depth: usize) Error!void {
+            const value = try self.read();
+            // An object key without a value.
+            if (value == .containerEnd) return error.UnexpectedContainerEnd;
+            var leaves: usize = 0;
+            while (leaves < run.len) : (leaves += 1) {
+                const seg = path.currentSegment(&run[leaves]) orelse break;
+                if (seg.rest.len != 0) break;
             }
+            for (run[0..leaves]) |*q| resolveQuery(q, value, remaining);
+            if (remaining.* == 0) return;
+
+            const children = run[leaves..];
+            if (children.len == 0) {
+                // Nothing looks inside the value: skip its contents.
+                if (value == .object or value == .array) try self.skipRestOfContainer();
+                return;
+            }
+            path.descend(children);
+            try self.resolveIn(value, children, remaining, depth + 1);
+            path.ascend(children, depth);
         }
 
-        fn readPathFromValue(self: *Self, val: common.Value, remaining_path: []const u8) Error!?common.Value {
+        /// Skips the remaining entries of the container the reader is in, and its end.
+        fn skipRestOfContainer(self: *Self) Error!void {
+            while ((try self.peekTag()).tag != .containerEnd) try self.skipValue();
+            _ = try self.read();
+        }
+
+        /// `segment` is the index of the first segment of `remaining_path` in the whole path.
+        fn readPathFromValue(self: *Self, val: common.Value, remaining_path: []const u8, segment: usize) Error!?common.Value {
+            // Each segment is a level of recursion: stop at the same limit `path.validate` enforces.
+            if (segment >= path.max_segments) return null;
             switch (val) {
-                .object => return try self.readPathFromObject(remaining_path),
-                .array => return try self.readPathFromArray(remaining_path),
+                .object => return try self.readPathFromObject(remaining_path, segment),
+                .array => return try self.readPathFromArray(remaining_path, segment),
                 .typedArray => |ta| return self.readPathFromTypedArray(ta, remaining_path),
                 else => return null,
             }
         }
 
-        fn readPathFromObject(self: *Self, remaining_path: []const u8) Error!?common.Value {
+        fn readPathFromObject(self: *Self, remaining_path: []const u8, segment: usize) Error!?common.Value {
             const seg = path.parseSegment(remaining_path) orelse return null;
             if (seg.is_index) return null;
 
@@ -934,12 +754,13 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 }
 
                 const child = try self.read();
+                if (child == .containerEnd) return error.UnexpectedContainerEnd;
                 if (seg.rest.len == 0) return child;
-                return try self.readPathFromValue(child, seg.rest);
+                return try self.readPathFromValue(child, seg.rest, segment + 1);
             }
         }
 
-        fn readPathFromArray(self: *Self, remaining_path: []const u8) Error!?common.Value {
+        fn readPathFromArray(self: *Self, remaining_path: []const u8, segment: usize) Error!?common.Value {
             const seg = path.parseSegment(remaining_path) orelse return null;
             if (!seg.is_index) return null;
 
@@ -961,8 +782,9 @@ pub fn Reader(comptime limits: ReadLimits) type {
                 }
 
                 const child = try self.read();
+                if (child == .containerEnd) return error.UnexpectedContainerEnd;
                 if (seg.rest.len == 0) return child;
-                return try self.readPathFromValue(child, seg.rest);
+                return try self.readPathFromValue(child, seg.rest, segment + 1);
             }
         }
 
@@ -987,12 +809,12 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             self.pos = 0;
             self.depth = 0;
-            self.iteration_counts = [_]usize{0} ** counter_stack_size;
+            self.iteration_counts = @splat(0);
 
             const root_val = try self.read();
             if (path_str.len == 0) return root_val;
 
-            return try self.readPathFromValue(root_val, path_str);
+            return try self.readPathFromValue(root_val, path_str, 0);
         }
     };
 }

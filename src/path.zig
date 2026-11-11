@@ -1,5 +1,9 @@
 const std = @import("std");
 
+/// The maximum number of segments in a path; longer paths are malformed. Path lookups and updates
+/// recurse once per segment, so this bounds their stack use regardless of the input.
+pub const max_segments = 64;
+
 /// A single parsed path segment.
 /// - Objects: `is_index=false`, `key` set
 /// - Arrays: `is_index=true`, `index` set
@@ -100,31 +104,27 @@ pub fn parseSegment(path: []const u8) ?Segment {
     return .{ .is_index = false, .index = 0, .key = key, .rest = path[rest_start..] };
 }
 
+/// Whether `path` is well-formed and has at most `max_segments` segments.
 pub fn validate(path: []const u8) bool {
     if (path.len == 0) return true;
     var remaining = path;
-    while (true) {
+    for (0..max_segments) |_| {
         const seg = parseSegment(remaining) orelse return false;
         remaining = seg.rest;
         if (remaining.len == 0) return true;
     }
-}
-
-pub fn segmentAtDepth(path: []const u8, depth: usize) ?Segment {
-    var remaining = path;
-    var d: usize = 0;
-    while (true) : (d += 1) {
-        const seg = parseSegment(remaining) orelse return null;
-        if (d == depth) return seg;
-        remaining = seg.rest;
-        if (remaining.len == 0) return null;
-    }
+    return false;
 }
 
 /// Orders full paths by their segments.
 /// Keys sort before indices, parents sort before children.
-/// Invalid paths sort by raw bytes.
+/// Both paths must be valid: invalid paths fall back to raw byte order, which is not consistent with
+/// the segment order, so sorting a mix of valid and invalid paths does not group them by segment.
 pub fn lessThanPathSegments(a: []const u8, b: []const u8) bool {
+    // The empty path is the root: it has no segments, unlike a quoted empty key (`['']`), and
+    // sorts before every other path.
+    if (a.len == 0 or b.len == 0) return a.len == 0 and b.len != 0;
+
     var ra = a;
     var rb = b;
 
@@ -155,5 +155,30 @@ pub fn lessThanPathSegments(a: []const u8, b: []const u8) bool {
 
         ra = sa.rest;
         rb = sb.rest;
+    }
+}
+
+// Traversal of sorted paths, shared by `Reader.readPaths` and `Writer.applyUpdates`. Their items have
+// a `path` and an `offset` marking where the segment being processed starts, so the current segment
+// is found without re-parsing the path from its start.
+
+/// The segment of `item.path` that starts at `item.offset`.
+pub fn currentSegment(item: anytype) ?Segment {
+    return parseSegment(item.path[item.offset..]);
+}
+
+/// Moves each item past its current segment, to the next level down.
+pub fn descend(items: anytype) void {
+    for (items) |*item| {
+        if (currentSegment(item)) |seg| item.offset = item.path.len - seg.rest.len;
+    }
+}
+
+/// Moves each item back to its segment at `depth`, undoing `descend`.
+pub fn ascend(items: anytype, depth: usize) void {
+    for (items) |*item| {
+        var rest = item.path;
+        for (0..depth) |_| rest = (parseSegment(rest) orelse break).rest;
+        item.offset = item.path.len - rest.len;
     }
 }
